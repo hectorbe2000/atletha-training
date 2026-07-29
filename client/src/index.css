@@ -1,0 +1,55 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    color-scheme: dark;
+    -webkit-tap-highlight-color: transparent;
+  }
+  body {
+    @apply bg-fondo text-texto font-sans antialiased;
+  }
+  /* El foco solo se ve al navegar con teclado, pero cuando se ve, se ve. */
+  :focus-visible {
+    @apply outline-none ring-2 ring-acento ring-offset-2 ring-offset-fondo;
+  }
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-thumb {
+    background: #262b33; border-radius: 999px; border: 2px solid #0b0d10;
+  }
+}
+
+@layer components {
+  .tarjeta {
+    @apply bg-superficie border border-borde rounded-xl2;
+  }
+  .campo {
+    @apply w-full px-3.5 py-2.5 bg-superficie border border-borde rounded-[9px]
+           text-[15px] placeholder:text-texto-tenue
+           transition-colors duration-rapido ease-salida
+           focus:border-acento focus:outline-none;
+  }
+  .etiqueta {
+    @apply block mb-1.5 text-[12.5px] font-medium text-texto-suave;
+  }
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-[9px]
+           text-[14px] font-semibold cursor-pointer
+           transition-[transform,opacity,background-color,border-color]
+           duration-rapido ease-salida
+           active:scale-[.97] disabled:opacity-50 disabled:pointer-events-none;
+  }
+  .btn-primario  { @apply btn bg-acento text-acento-texto border border-acento hover:opacity-90; }
+  .btn-secundario{ @apply btn bg-superficie-alta text-texto border border-borde hover:border-borde-fuerte; }
+  .btn-fantasma  { @apply btn bg-transparent text-texto-suave border border-transparent hover:text-texto hover:bg-superficie; }
+  .btn-peligro   { @apply btn bg-transparent text-estado-critico border border-estado-critico/40 hover:bg-estado-critico/10; }
+}
+
+/* Nada se mueve si el sistema pide movimiento reducido. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
+  }
+}

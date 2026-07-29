@@ -1,0 +1,24 @@
+{
+  "name": "gym",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Sistema de gestión de gimnasio: socios, cobros, rutinas y guía de ejercicios",
+  "scripts": {
+    "instalar": "npm --prefix server install && npm --prefix client install",
+    "migrar": "npm --prefix server run migrate",
+    "importar": "npm --prefix server run import:ejercicios",
+    "traducir": "node server/scripts/traducir-nombres.js",
+    "traducir:informe": "node server/scripts/traducir-nombres.js --informe",
+    "crear:admin": "npm --prefix server run crear:admin --",
+    "respaldar": "node server/scripts/respaldar.js",
+    "respaldos": "node server/scripts/respaldar.js --listar",
+    "plantillas": "node server/scripts/plantillas-base.js",
+    "demo": "node server/scripts/datos-demo.js",
+    "demo:borrar": "node server/scripts/datos-demo.js --borrar",
+    "api": "npm --prefix server run dev",
+    "web": "npm --prefix client run dev",
+    "build": "npm --prefix client run build",
+    "start": "npm --prefix server start",
+    "prueba": "node server/scripts/prueba-humo.js --url http://localhost:4100"
+  }
+}

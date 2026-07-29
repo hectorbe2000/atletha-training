@@ -1,0 +1,234 @@
+-- Funciones que existian en la base gym antes de crear el esquema del gimnasio.
+-- Recuperadas desde la base 'postgres' (origen de la copia). Ejecutar sobre gym para restaurarlas.
+
+CREATE OR REPLACE FUNCTION public.addfila()
+ RETURNS void
+ LANGUAGE plpgsql
+AS $function$
+DECLARE I INT;
+BEGIN
+FOR I IN 1..1000
+LOOP
+INSERT INTO FILAS(ID) VALUES (I);
+END LOOP;
+RETURN;
+END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.aumentar(a integer)
+ RETURNS integer
+ LANGUAGE plpgsql
+AS $function$
+BEGIN
+RETURN A+2;
+END
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.bbdd(bd character varying)
+ RETURNS void
+ LANGUAGE plpgsql
+AS $function$
+DECLARE TUPLA RECORD;
+BEGIN
+SELECT INTO TUPLA * FROM PG_CATALOG.PG_DATABA WHERE DATNAME = BD;
+IF FOUND THEN
+RAISE NOTICE 'NOMBRE DE NASE DE DATO : %', TUPLA.DATNAME;
+RAISE NOTICE 'PROPIETARIO: %', TUPLA.DATDBA;
+ELSE 
+RAISE NOTICE 'LA BASE NO EXISTE';
+END IF;
+RETURN;
+END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.bucle()
+ RETURNS integer
+ LANGUAGE plpgsql
+AS $function$
+DECLARE REC INTEGER;
+BEGIN
+<<sumauno>>
+LOOP
+RAISE NOTICE 'PRIMER BUCLE %', REC;
+REC:= REC+1;
+EXIT WHEN REC > 7;
+RAISE NOTICE 'PRIMERA SUMA %', REC;
+<<sumados>>
+LOOP
+RAISE NOTICE ' BUCLE INTERNO %', REC;
+REC:= REC+2;
+CONTINUE sumauno;
+RAISE NOTICE 'NO DEBE LLEGAR ACA %', REC;
+END LOOP sumados;
+END LOOP sumauno;
+RETURN REC;
+END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.bucleando()
+ RETURNS integer
+ LANGUAGE plpgsql
+AS $function$
+DECLARE REC INTEGER;
+BEGIN
+REC:=0;
+<<SUMA_UNO>>
+LOOP
+RAISE NOTICE 'VALOR INICIAL %', REC;
+REC:=REC+1;
+EXIT WHEN REC > 7;
+RAISE NOTICE 'SUMA UNO %', REC;
+<<SUMA_DOS>>
+LOOP 
+RAISE NOTICE 'BUCLE INTERN %',REC;
+REC:=REC+2;
+CONTINUE SUMA_UNO;
+RAISE NOTICE ' NO LLEGA A ESTA PARTE %', REC;
+END LOOP SUMA_DOS;
+END LOOP SUMA_UNO;
+RETURN REC;
+END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.dividir(a numeric, b numeric)
+ RETURNS numeric
+ LANGUAGE plpgsql
+AS $function$
+DECLARE C DECIMAL;
+BEGIN
+C:=A/B;
+RAISE NOTICE 'EL RESULTADO ES %', C;
+RETURN C;
+END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.notifica()
+ RETURNS void
+ LANGUAGE plpgsql
+AS $function$
+DECLARE REGISTRO RECORD;
+BEGIN
+RAISE NOTICE 'EL VALOR POR DEFECTO ES %', FOUND;
+SELECT INTO REGISTRO * FROM PG_CATALOG.PG_DATABASE;
+RAISE NOTICE ' AHORA ESTE ES EL VALOR %', FOUND;
+RETURN;
+END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.nuevo()
+ RETURNS void
+ LANGUAGE plpgsql
+AS $function$
+DECLARE REC RECORD;
+BEGIN
+RAISE NOTICE 'EL VALOR PRINCIPAL ES %', FOUND;
+SELECT INTO REC * FROM PG_CATALOG.PG_DATABASE;
+RAISE NOTICE 'AHORA EL VALOR ES %', FOUND;
+RETURN;
+END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.par(num integer)
+ RETURNS character varying
+ LANGUAGE plpgsql
+AS $function$
+DECLARE TEXTO VARCHAR;
+BEGIN
+IF (NUM%2=0) THEN TEXTO := 'EL NUMERO'|| NUM ||'ES PAR';
+END IF;
+RETURN TEXTO;
+END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.resta(a integer, b integer, d integer)
+ RETURNS void
+ LANGUAGE plpgsql
+AS $function$
+DECLARE C INTEGER;
+BEGIN
+C:=A-B-D;
+RAISE NOTICE 'LA RESTA ES %', C;
+RETURN;
+END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.saber(num integer)
+ RETURNS character varying
+ LANGUAGE plpgsql
+AS $function$
+DECLARE TEXTO VARCHAR;
+BEGIN
+IF (NUM%2=0) then texto:= 'el numero '|| num || 'par';
+end if;
+return texto; end;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.suma(a integer, b integer)
+ RETURNS void
+ LANGUAGE plpgsql
+AS $function$
+DECLARE C INTEGER;
+BEGIN
+C:=A+B;
+RAISE NOTICE 'LA SUMA ES %', C;
+RETURN;
+END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.verfila()
+ RETURNS void
+ LANGUAGE plpgsql
+AS $function$
+DECLARE REC RECORD;
+BEGIN
+FOR REC IN SELECT ID FROM FILAS 
+LOOP
+RAISE NOTICE 'EL VALOR DE LA COLUMNA ES %', REC.ID;
+END LOOP;
+RETURN;
+END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.yanise()
+ RETURNS void
+ LANGUAGE plpgsql
+AS $function$
+DECLARE I INTEGER;
+BEGIN
+FOR I IN 1..1000
+LOOP
+INSERT INTO FILAS(ID) VALUES (I);
+END LOOP;
+RETURN ;
+END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.yanose()
+ RETURNS integer
+ LANGUAGE plpgsql
+AS $function$
+DECLARE I INTEGER;
+BEGIN
+FOR I IN 1..1000
+LOOP
+INSERT INTO FILAS(ID) VALUES (I);
+END LOOP;
+RETURN I;
+END;
+$function$
+;
+
