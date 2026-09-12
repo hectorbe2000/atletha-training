@@ -2,9 +2,11 @@ import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 
 import { api, fecha, fechaHora, guaranies } from '../../api.js';
+import { BotonComprobante } from '../../componentes/BotonComprobante.jsx';
 import { BotonWhatsApp } from '../../componentes/BotonWhatsApp.jsx';
 import { EditarSocio } from '../../componentes/EditarSocio.jsx';
 import { FotoSocio } from '../../componentes/FotoSocio.jsx';
+import { HuellasSocio } from '../../componentes/HuellasSocio.jsx';
 import { PesoYMedidas } from '../../componentes/PesoYMedidas.jsx';
 import { Aviso, Campo, Cargando, InsigniaEstado, Modal, Tile } from '../../componentes/ui.jsx';
 import { useDatos } from '../../hooks.js';
@@ -18,6 +20,9 @@ export function SocioFicha() {
   const [abrirEdicion, setAbrirEdicion] = useState(false);
   const [mensaje, setMensaje] = useState('');
   const [errorAccion, setErrorAccion] = useState('');
+  const [passwordNueva, setPasswordNueva] = useState('');
+  const [reiniciando, setReiniciando] = useState(false);
+  const [pagoRecien, setPagoRecien] = useState(null);
 
   if (cargando) return <Cargando texto="Cargando la ficha…" />;
   if (error) return <Aviso tipo="error">{error.message}</Aviso>;
@@ -26,7 +31,7 @@ export function SocioFicha() {
   const { socio, membresias, pagos, rutinas, asistencias } = datos;
 
   async function registrarAsistencia() {
-    setErrorAccion(''); setMensaje('');
+    setErrorAccion(''); setMensaje(''); setPagoRecien(null);
     try {
       const r = await api.post(`/api/socios/${id}/asistencia`);
       setMensaje(r.duplicado ? r.mensaje : 'Asistencia registrada.');
@@ -36,13 +41,18 @@ export function SocioFicha() {
     }
   }
 
-  async function reiniciarPassword() {
-    setErrorAccion(''); setMensaje('');
+  async function reiniciarPassword(e) {
+    e.preventDefault();
+    setErrorAccion(''); setMensaje(''); setPagoRecien(null);
+    setReiniciando(true);
     try {
-      const r = await api.post(`/api/socios/${id}/reset-password`);
+      const r = await api.post(`/api/socios/${id}/reset-password`, { password: passwordNueva });
       setMensaje(r.mensaje);
-    } catch (e) {
-      setErrorAccion(e.message);
+      setPasswordNueva('');
+    } catch (err) {
+      setErrorAccion(err.message);
+    } finally {
+      setReiniciando(false);
     }
   }
 
@@ -84,7 +94,21 @@ export function SocioFicha() {
         </div>
       </header>
 
-      {mensaje && <Aviso tipo="ok">{mensaje}</Aviso>}
+      {mensaje && (
+        <Aviso tipo="ok">
+          <span className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+            {mensaje}
+            {/* Justo después de cobrar es cuando el socio está esperando el papel. */}
+            {pagoRecien && (
+              <BotonComprobante
+                pagoId={pagoRecien}
+                texto="Bajar comprobante"
+                className="btn-secundario inline-flex items-center gap-1.5 px-2.5 py-1 text-[12.5px]"
+              />
+            )}
+          </span>
+        </Aviso>
+      )}
       {errorAccion && <Aviso tipo="error">{errorAccion}</Aviso>}
       {!socio.activo && (
         <Aviso tipo="error">
@@ -170,17 +194,27 @@ export function SocioFicha() {
             <table className="w-full text-[12.5px]">
               <thead>
                 <tr className="border-b border-borde text-left text-texto-suave">
+                  <th className="py-1.5 font-medium">N.º</th>
                   <th className="py-1.5 font-medium">Fecha</th>
                   <th className="py-1.5 font-medium">Método</th>
                   <th className="py-1.5 text-right font-medium">Monto</th>
+                  <th className="py-1.5" />
                 </tr>
               </thead>
               <tbody>
                 {pagos.map((p) => (
                   <tr key={p.id} className="border-b border-borde/60 last:border-0">
+                    <td className="py-1.5 tabular-nums text-texto-tenue">{p.comprobante_nro}</td>
                     <td className="py-1.5">{fecha(p.fecha_pago)}</td>
                     <td className="py-1.5 text-texto-suave">{p.metodo[0] + p.metodo.slice(1).toLowerCase()}</td>
                     <td className="py-1.5 text-right font-medium tabular-nums">{guaranies(p.monto)}</td>
+                    <td className="py-1.5 pl-2 text-right">
+                      <BotonComprobante
+                        pagoId={p.id}
+                        texto="Comprobante"
+                        className="btn-fantasma inline-flex items-center gap-1.5 px-1.5 py-0.5 text-[12px]"
+                      />
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -230,12 +264,29 @@ export function SocioFicha() {
       <section className="tarjeta p-4">
         <h2 className="mb-1 text-[14.5px] font-semibold">Acceso del socio</h2>
         <p className="mb-3 text-[12.5px] text-texto-suave">
-          Si se olvidó la contraseña, se la reiniciás a su cédula y el sistema le pide cambiarla al entrar.
+          Si se olvidó la contraseña, escribile una nueva acá y decísela. Las sesiones que
+          tenga abiertas en otros dispositivos se cierran.
         </p>
-        <button type="button" onClick={reiniciarPassword} className="btn-secundario">
-          Reiniciar contraseña
-        </button>
+        <form onSubmit={reiniciarPassword} className="flex flex-wrap items-end gap-2">
+          <Campo etiqueta="Contraseña nueva" hint="Mínimo 6 caracteres." requerido>
+            <input
+              className="campo"
+              type="text"
+              value={passwordNueva}
+              onChange={(e) => setPasswordNueva(e.target.value)}
+              autoComplete="off"
+              minLength={6}
+              required
+              placeholder="La que le dictes"
+            />
+          </Campo>
+          <button type="submit" className="btn-secundario" disabled={reiniciando}>
+            {reiniciando ? 'Reiniciando…' : 'Reiniciar contraseña'}
+          </button>
+        </form>
       </section>
+
+      <HuellasSocio socioId={socio.socio_id} />
 
       <EditarSocio
         abierto={abrirEdicion}
@@ -249,7 +300,16 @@ export function SocioFicha() {
         socioId={id}
         estadoActual={socio}
         onCerrar={() => setAbrirCobro(false)}
-        onCobrado={() => { setAbrirCobro(false); setMensaje('Cobro registrado y membresía renovada.'); refrescar(); }}
+        onCobrado={(pagoId, numero) => {
+          setAbrirCobro(false);
+          setMensaje(
+            numero
+              ? `Cobro registrado y membresía renovada. Comprobante N.º ${numero}.`
+              : 'Membresía renovada.'
+          );
+          setPagoRecien(pagoId);
+          refrescar();
+        }}
       />
     </div>
   );
@@ -274,7 +334,7 @@ function ModalCobro({ abierto, socioId, estadoActual, onCerrar, onCobrado }) {
     setError('');
     setEnviando(true);
     try {
-      await api.post(`/api/socios/${socioId}/renovar`, {
+      const r = await api.post(`/api/socios/${socioId}/renovar`, {
         plan_id: Number(planId),
         metodo,
         ...(monto !== '' ? { monto: Number(monto) } : {}),
@@ -283,7 +343,8 @@ function ModalCobro({ abierto, socioId, estadoActual, onCerrar, onCobrado }) {
       });
       setPlanId(''); setMonto(''); setFechaInicio(''); setComprobante('');
       setEnviando(false);
-      onCobrado();
+      // Se pasa el id del pago para poder ofrecer el comprobante enseguida.
+      onCobrado(r?.membresia?.pago_id ?? null, r?.membresia?.comprobante_nro ?? null);
     } catch (err) {
       setError(err.message);
       setEnviando(false);
@@ -313,7 +374,15 @@ function ModalCobro({ abierto, socioId, estadoActual, onCerrar, onCobrado }) {
 
         <div className="grid gap-3 sm:grid-cols-2">
           <Campo etiqueta="Método de pago">
-            <select className="campo" value={metodo} onChange={(e) => setMetodo(e.target.value)}>
+            <select
+              className="campo"
+              value={metodo}
+              onChange={(e) => {
+                setMetodo(e.target.value);
+                // Si vuelve a efectivo, que no quede colgado un número tipeado.
+                if (e.target.value === 'EFECTIVO') setComprobante('');
+              }}
+            >
               {['EFECTIVO', 'TRANSFERENCIA', 'TARJETA', 'QR', 'OTRO'].map((m) => (
                 <option key={m} value={m}>{m[0] + m.slice(1).toLowerCase()}</option>
               ))}
@@ -332,10 +401,27 @@ function ModalCobro({ abierto, socioId, estadoActual, onCerrar, onCobrado }) {
           <Campo etiqueta="Inicio del período" hint="Vacío = encadenar al vencimiento actual.">
             <input type="date" className="campo" value={fechaInicio} onChange={(e) => setFechaInicio(e.target.value)} />
           </Campo>
-          <Campo etiqueta="Comprobante">
-            <input className="campo" value={comprobante} onChange={(e) => setComprobante(e.target.value)} placeholder="N.º de recibo" maxLength={40} />
-          </Campo>
+          {/* En efectivo no hay número de operación que anotar. */}
+          {metodo !== 'EFECTIVO' && (
+            <Campo
+              etiqueta="N.º de operación"
+              hint="Opcional. El que da el banco o la billetera, para cruzar con el extracto."
+            >
+              <input
+                className="campo"
+                value={comprobante}
+                onChange={(e) => setComprobante(e.target.value)}
+                placeholder="Ej. TRF-889201"
+                maxLength={40}
+              />
+            </Campo>
+          )}
         </div>
+
+        <p className="text-[12px] text-texto-tenue">
+          El número de comprobante lo pone el sistema al registrar el cobro y no se puede
+          repetir. No hace falta cargarlo a mano.
+        </p>
 
         <Aviso tipo="error">{error}</Aviso>
 

@@ -10,7 +10,7 @@ import { Aviso, Cargando, Modal, Vacio } from './ui.jsx';
  *
  * Lo usan el armador del administrador y la pantalla de rutinas del socio, así
  * que la búsqueda y los filtros se escriben una sola vez. Usa la disposición
- * densa (la variante "Ficha" del prototipo): acá se elige leyendo datos, no
+ * densa: acá se elige leyendo datos, no
  * mirando la animación.
  *
  * El modal no se cierra al agregar: lo normal es cargar varios seguidos.

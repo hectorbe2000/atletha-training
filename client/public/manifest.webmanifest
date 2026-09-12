@@ -1,7 +1,7 @@
 {
-  "name": "Gimnasio",
-  "short_name": "Gimnasio",
-  "description": "Rutinas, ejercicios y progreso del gimnasio.",
+  "name": "Atletha Training",
+  "short_name": "Atletha",
+  "description": "Rutinas, ejercicios y progreso en Atletha Training.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

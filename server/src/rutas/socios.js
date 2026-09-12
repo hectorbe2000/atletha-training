@@ -4,6 +4,9 @@ import { z } from 'zod';
 
 import { una, varias, query, transaccion } from '../db.js';
 import { ErrorHttp, noEncontrado, paginacion, ruta, validar } from '../http.js';
+import { decidirAcceso, MOTIVOS } from '../acceso/decision.js';
+import { numeroComprobante } from '../comprobante.js';
+import { armarPlanilla, nombreConFecha, responderPlanilla } from '../planilla.js';
 import { autenticar, soloAdmin, socioAccesible } from '../middleware/auth.js';
 
 export const rutasSocios = Router();
@@ -27,7 +30,13 @@ const esquemaAlta = z.object({
   telefono_emergencia: z.string().trim().max(30).optional().or(z.literal('')),
   observaciones_medicas: z.string().trim().max(1000).optional().or(z.literal('')),
   objetivo: z.string().trim().max(120).optional().or(z.literal('')),
-  password: z.string().min(6, 'La contraseña debe tener al menos 6 caracteres.').optional(),
+  // Obligatoria y la elige el administrador. Antes, si no venia, la inicial
+  // era la propia cedula: un dato que esta a la vista en el mostrador y que
+  // cualquiera puede adivinar, asi que la cuenta quedaba abierta hasta que el
+  // socio entraba por primera vez.
+  password: z
+    .string()
+    .min(6, 'Poné una contraseña de al menos 6 caracteres y decísela al socio.'),
   // Membresia inicial opcional, en el mismo alta.
   plan_id: z.coerce.number().int().positive().optional(),
   fecha_inicio: z.string().date('Fecha inválida.').optional(),
@@ -36,6 +45,25 @@ const esquemaAlta = z.object({
 });
 
 const vacioANull = (v) => (v === '' || v === undefined ? null : v);
+
+/**
+ * Anota el intento en la bitácora de la puerta.
+ *
+ * Los ingresos del mostrador van a la misma tabla que los del molinete, para
+ * que "quién entró y por dónde" se responda mirando un solo lado. Que falle
+ * el registro no puede frenar al socio en la puerta: se avisa y se sigue.
+ */
+async function registrarAcceso({ socioId, permitido, motivo, registradoPor, forzado = false }) {
+  try {
+    await query(
+      `INSERT INTO accesos (socio_id, permitido, motivo, origen, forzado, registrado_por)
+       VALUES ($1, $2, $3, 'MOSTRADOR', $4, $5)`,
+      [socioId, permitido, motivo, forzado, registradoPor]
+    );
+  } catch (error) {
+    console.error('[acceso] no se pudo registrar el ingreso del mostrador:', error.message);
+  }
+}
 
 // --------------------------------------------------------------------
 //  Mostrador: ingreso por cedula
@@ -59,30 +87,32 @@ rutasSocios.post(
     if (!socio) {
       throw new ErrorHttp(404, `No hay ningún socio con la cédula ${documento}.`);
     }
-    if (!socio.activo) {
-      return res.json({
-        socio,
+
+    // La misma regla que usa el molinete. Ver server/src/acceso/decision.js:
+    // tener dos copias garantizaba que tarde o temprano una dijera que sí y
+    // la otra que no para el mismo socio.
+    const decision = decidirAcceso(socio);
+
+    // Un socio dado de baja no pasa ni forzando: si se lo quiere dejar
+    // entrar, primero hay que reactivarlo desde la ficha.
+    const forzable = decision.motivo !== MOTIVOS.INACTIVO;
+
+    if (!decision.permitido && !(forzar && forzable)) {
+      await registrarAcceso({
+        socioId: socio.socio_id,
         permitido: false,
-        registrado: false,
-        motivo: 'INACTIVO',
-        mensaje: 'La cuenta de este socio está dada de baja.',
+        motivo: decision.motivo,
+        registradoPor: req.usuario.id,
       });
-    }
-
-    const alDia = socio.estado === 'AL_DIA' || socio.estado === 'POR_VENCER';
-
-    // Vencido o sin plan: no se registra solo. El admin decide si lo deja
-    // pasar igual, y ese "igual" queda como una acción explícita.
-    if (!alDia && !forzar) {
       return res.json({
         socio,
         permitido: false,
         registrado: false,
-        motivo: socio.estado,
+        motivo: decision.motivo,
         mensaje:
-          socio.estado === 'VENCIDO'
-            ? `La membresía venció hace ${Math.abs(socio.dias_restantes)} días.`
-            : 'Este socio no tiene ninguna membresía cargada.',
+          decision.motivo === MOTIVOS.INACTIVO
+            ? 'La cuenta de este socio está dada de baja.'
+            : decision.mensaje,
       });
     }
 
@@ -93,12 +123,21 @@ rutasSocios.post(
       [socio.socio_id, req.usuario.id]
     );
 
+    const forzado = !decision.permitido;
+    await registrarAcceso({
+      socioId: socio.socio_id,
+      permitido: true,
+      motivo: forzado ? `${decision.motivo}_FORZADO` : decision.motivo,
+      registradoPor: req.usuario.id,
+      forzado,
+    });
+
     res.json({
       socio,
       permitido: true,
       registrado: Boolean(registro),
-      forzado: !alDia,
-      motivo: alDia ? socio.estado : `${socio.estado}_FORZADO`,
+      forzado,
+      motivo: forzado ? `${decision.motivo}_FORZADO` : decision.motivo,
       mensaje: registro
         ? '¡Adelante!'
         : 'Ya tenía la entrada de hoy registrada.',
@@ -156,9 +195,19 @@ rutasSocios.get(
     if (req.query.inactivos !== 'true') condiciones.push('activo');
 
     const where = condiciones.length ? `WHERE ${condiciones.join(' AND ')}` : '';
+    // El último pago viaja con cada socio para poder ofrecer el comprobante
+    // desde el listado: si el mostrador se olvidó de bajarlo al cobrar, no
+    // tiene que entrar a la ficha a buscarlo.
     const filas = await varias(
-      `SELECT *, (count(*) OVER ())::int AS total
-         FROM v_socios_estado
+      `SELECT v.*, (count(*) OVER ())::int AS total,
+              p.id AS ultimo_pago_id
+         FROM v_socios_estado v
+         LEFT JOIN LATERAL (
+           SELECT id FROM pagos
+            WHERE socio_id = v.socio_id
+            ORDER BY fecha_pago DESC, id DESC
+            LIMIT 1
+         ) p ON true
          ${where}
         ORDER BY
           CASE estado WHEN 'VENCIDO' THEN 1 WHEN 'POR_VENCER' THEN 2
@@ -180,6 +229,64 @@ rutasSocios.get(
 );
 
 // --------------------------------------------------------------------
+//  Planilla de socios
+//
+//  Va antes de '/:id' porque Express resuelve en orden de registro: si no,
+//  "exportar" se tomaría como el id de un socio.
+// --------------------------------------------------------------------
+const COLUMNAS_SOCIOS = [
+  { clave: 'codigo', titulo: 'Código' },
+  { clave: 'documento', titulo: 'Cédula' },
+  { clave: 'apellido', titulo: 'Apellido' },
+  { clave: 'nombre', titulo: 'Nombre' },
+  { clave: 'telefono', titulo: 'Teléfono' },
+  { clave: 'email', titulo: 'Email' },
+  { clave: 'fecha_nacimiento', titulo: 'Nacimiento' },
+  { clave: 'sexo', titulo: 'Sexo' },
+  { clave: 'fecha_ingreso', titulo: 'Socio desde' },
+  { clave: 'plan', titulo: 'Plan' },
+  { clave: 'fecha_inicio', titulo: 'Inicio' },
+  { clave: 'fecha_fin', titulo: 'Vence' },
+  { clave: 'dias_restantes', titulo: 'Días restantes' },
+  { clave: 'estado', titulo: 'Estado' },
+  { clave: 'activo', titulo: 'Activo', formato: (v) => (v ? 'Sí' : 'No') },
+  { clave: 'ultima_asistencia', titulo: 'Última asistencia' },
+  { clave: 'asistencias_mes', titulo: 'Asistencias del mes' },
+  { clave: 'objetivo', titulo: 'Objetivo' },
+];
+
+rutasSocios.get(
+  '/exportar',
+  soloAdmin,
+  ruta(async (req, res) => {
+    await query('SELECT fn_actualizar_membresias_vencidas()');
+
+    // Por defecto solo los activos, igual que el listado de la pantalla.
+    const incluirInactivos = req.query.inactivos === 'true';
+
+    const filas = await varias(
+      `SELECT v.codigo, v.documento, v.apellido, v.nombre, v.telefono, v.email,
+              s.fecha_nacimiento, s.sexo, v.fecha_ingreso,
+              v.plan, v.fecha_inicio, v.fecha_fin, v.dias_restantes, v.estado, v.activo,
+              s.objetivo,
+              a.ultima AS ultima_asistencia,
+              coalesce(a.este_mes, 0) AS asistencias_mes
+         FROM v_socios_estado v
+         JOIN socios s ON s.id = v.socio_id
+         LEFT JOIN LATERAL (
+           SELECT max(fecha) AS ultima,
+                  count(*) FILTER (WHERE fecha >= date_trunc('month', current_date))::int AS este_mes
+             FROM asistencias WHERE socio_id = v.socio_id
+         ) a ON true
+        ${incluirInactivos ? '' : 'WHERE v.activo'}
+        ORDER BY v.apellido, v.nombre`
+    );
+
+    responderPlanilla(res, nombreConFecha('socios'), armarPlanilla(COLUMNAS_SOCIOS, filas));
+  })
+);
+
+// --------------------------------------------------------------------
 //  Alta de socio (usuario + socio + membresia inicial opcional)
 // --------------------------------------------------------------------
 rutasSocios.post(
@@ -193,9 +300,7 @@ rutasSocios.post(
       throw new ErrorHttp(409, `Ya hay un usuario cargado con la cédula ${d.documento}.`);
     }
 
-    // Sin contraseña explícita, la inicial es la propia cédula y se obliga a cambiarla.
-    const passwordInicial = d.password ?? d.documento;
-    const hash = await bcrypt.hash(passwordInicial, 10);
+    const hash = await bcrypt.hash(d.password, 10);
 
     const resultado = await transaccion(async (c) => {
       const { rows: [usuario] } = await c.query(
@@ -210,7 +315,9 @@ rutasSocios.post(
           d.apellido,
           vacioANull(d.email),
           vacioANull(d.telefono),
-          !d.password,
+          // La contraseña la puso el administrador y el socio se la queda: no
+          // se le exige cambiarla, la cambia cuando quiera desde su perfil.
+          false,
         ]
       );
 
@@ -246,12 +353,11 @@ rutasSocios.post(
       return { socio_id: socio.id, codigo: socio.codigo, usuario_id: usuario.id, membresia };
     });
 
+    // La contraseña no se devuelve: la escribió el administrador hace dos
+    // segundos y no tiene por qué quedar dando vueltas en la respuesta.
     res.status(201).json({
       ...resultado,
-      password_inicial: d.password ? undefined : passwordInicial,
-      mensaje: d.password
-        ? 'Socio creado.'
-        : `Socio creado. Contraseña inicial: su cédula (${passwordInicial}). Se le pedirá cambiarla al entrar.`,
+      mensaje: 'Socio creado. Entra con su cédula y la contraseña que le pusiste.',
     });
   })
 );
@@ -298,16 +404,27 @@ async function crearMembresia(c, { socioId, planId, fechaInicio, monto, metodo, 
     ]
   );
 
+  // El id del pago vuelve con la membresía para poder ofrecer el comprobante
+  // apenas se termina de cobrar, que es cuando el socio lo está esperando.
   const importe = monto ?? plan.precio;
+  let pagoId = null;
   if (importe > 0) {
-    await c.query(
+    const { rows: [pago] } = await c.query(
       `INSERT INTO pagos (socio_id, membresia_id, monto, metodo, comprobante, registrado_por)
-       VALUES ($1, $2, $3, $4, $5, $6)`,
+       VALUES ($1, $2, $3, $4, $5, $6)
+       RETURNING id`,
       [socioId, membresia.id, importe, metodo ?? 'EFECTIVO', comprobante ?? null, registradoPor]
     );
+    pagoId = pago.id;
   }
 
-  return { ...membresia, plan: plan.nombre };
+  return {
+    ...membresia,
+    plan: plan.nombre,
+    pago_id: pagoId,
+    // El número que ve el socio, para poder mostrarlo apenas se cobra.
+    comprobante_nro: pagoId ? numeroComprobante(pagoId) : null,
+  };
 }
 
 // --------------------------------------------------------------------
@@ -338,7 +455,8 @@ rutasSocios.get(
         [socioId]
       ),
       varias(
-        `SELECT id, monto, metodo, fecha_pago, comprobante, observacion
+        `SELECT id, lpad(id::text, 7, '0') AS comprobante_nro,
+                monto, metodo, fecha_pago, comprobante, observacion
            FROM pagos WHERE socio_id = $1 ORDER BY fecha_pago DESC LIMIT 24`,
         [socioId]
       ),
@@ -505,24 +623,36 @@ rutasSocios.post(
   '/:id/reset-password',
   soloAdmin,
   ruta(async (req, res) => {
-    const socio = await una(
-      'SELECT s.usuario_id, u.documento FROM socios s JOIN usuarios u ON u.id = s.usuario_id WHERE s.id = $1',
-      [Number(req.params.id)]
-    );
+    const socio = await una('SELECT usuario_id FROM socios WHERE id = $1', [
+      Number(req.params.id),
+    ]);
     if (!socio) throw noEncontrado('Socio');
 
-    const nueva = (req.body?.password ?? socio.documento).toString();
-    if (nueva.length < 4) throw new ErrorHttp(400, 'La contraseña es demasiado corta.');
+    // Tambien la elige el administrador: antes, sin cuerpo, volvia a quedar
+    // la cedula y el problema del alta se repetia en cada reinicio.
+    const { password: nueva } = validar(
+      z.object({
+        password: z
+          .string()
+          .min(6, 'Poné una contraseña de al menos 6 caracteres y decísela al socio.'),
+      }),
+      req.body
+    );
 
+    // Reiniciar la contrasena tiene que sacar al que estuviera usando la
+    // cuenta: si el socio pide el reseteo porque alguien mas entraba con su
+    // cedula, dejarle la sesion abierta al otro no arregla nada.
     await query(
-      'UPDATE usuarios SET password_hash = $1, debe_cambiar_password = true WHERE id = $2',
+      `UPDATE usuarios
+          SET password_hash = $1, debe_cambiar_password = false,
+              tokens_validos_desde = now()
+        WHERE id = $2`,
       [await bcrypt.hash(nueva, 10), socio.usuario_id]
     );
 
     res.json({
       ok: true,
-      password_inicial: nueva,
-      mensaje: `Contraseña reiniciada a "${nueva}". El socio deberá cambiarla al entrar.`,
+      mensaje: 'Contraseña reiniciada. Decísela al socio; las sesiones abiertas se cerraron.',
     });
   })
 );

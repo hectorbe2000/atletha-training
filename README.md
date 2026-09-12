@@ -1,7 +1,7 @@
-# Sistema de Gimnasio
+# Atletha Training — sistema de gestión
 
-Gestión de socios, cobros y rutinas, con una guía de 1.324 ejercicios (GIF + instrucciones
-en 10 idiomas) tomada del dataset que está en la carpeta hermana `exercises-dataset-main/`.
+Gestión de socios, cobros y rutinas del gimnasio, con una guía de 1.324 ejercicios
+(GIF + instrucciones en 10 idiomas).
 
 Dos tipos de usuario:
 
@@ -68,7 +68,7 @@ Los socios de demo entran con su cédula y la contraseña `demo1234`.
 Con el servidor levantado:
 
 ```bash
-npm run prueba            # 84 verificaciones de punta a punta; limpia lo que crea
+npm run prueba            # 119 verificaciones de punta a punta; limpia lo que crea
 ```
 
 ---
@@ -128,6 +128,7 @@ gym/
 │   ├── db/
 │   │   ├── migrate.js          corredor de migraciones (tabla _migraciones)
 │   │   └── migrations/         001 esquema · 002 catálogos · 003 nombre_es
+│   ├── assets/logo.png         el que sale en el comprobante
 │   ├── scripts/
 │   │   ├── import-ejercicios.js
 │   │   ├── crear-admin.js
@@ -135,16 +136,24 @@ gym/
 │   │   └── prueba-humo.js
 │   └── src/
 │       ├── config.js  db.js  http.js  index.js
+│       ├── comprobante.js      el PDF del pago · planilla.js  el CSV para Excel
 │       ├── middleware/auth.js
-│       └── rutas/              auth · socios · planes · ejercicios · rutinas ·
-│                               entrenamiento · dashboard
+│       └── rutas/              auth · socios · planes · pagos · ejercicios ·
+│                               rutinas · entrenamiento · dashboard
 ├── client/                     React + Vite + Tailwind
 │   └── src/
-│       ├── api.js  auth.jsx  hooks.js
+│       ├── api.js  auth.jsx  hooks.js  marca.js
 │       ├── componentes/        Layout · CardEjercicio · graficos · ui
 │       └── paginas/            socio/ y admin/
-└── prototipos/                 exploración de diseño de la card del catálogo
+└── media/                      fotos y GIF de los ejercicios (no van al repo)
+    ├── images/  videos/        1324 de cada uno
+    ├── exercises.json          solo para "npm run importar"
+    └── LICENSE  NOTICE.md      atribución de las animaciones
 ```
+
+Todo lo que el sistema necesita está adentro de `gym/`. Antes las imágenes vivían en una
+carpeta hermana —la del repositorio de donde salió el catálogo— y el servidor no arrancaba si
+no la encontraba; ahora mover el sistema de PC es copiar una sola carpeta.
 
 ---
 
@@ -173,15 +182,25 @@ sirve es en el mostrador: ver la cara evita que se presten la cédula.
 el profe no tendría forma de saber qué prescribió. Las que se arma el socio
 (`origen = 'SOCIO'`) son suyas y las maneja entero. El administrador puede con las dos.
 
+De quién es una rutina lo decide el servidor, no el cuerpo del pedido: el `socio_id` que viaja
+en el `PUT` solo lo obedece un administrador. Para un socio se ignora y manda el dueño real,
+porque si no podía mandar el `PUT` de su propia rutina con el id de otro y escribírsela en la
+cuenta ajena.
+
 El flujo del socio es incremental, no hay que planificar la semana antes de empezar: en el
 catálogo, cada ejercicio tiene un **+** que abre el selector de rutina y día. Si todavía no
 tiene ninguna rutina propia, el mismo modal la crea con ese ejercicio adentro.
 
-**El peso y las medidas son del socio, no de la sesión.** `mediciones` guarda peso, grasa y
+**El peso y las medidas son del socio, no de la sesión.** `mediciones` guarda el peso y
 seis circunferencias, una fila por día (si se corrige, se pisa la del día). La altura vive en
 `socios.altura_cm` porque es un dato de la persona. La vista `v_mediciones` calcula el IMC,
 su categoría y la variación contra la medición anterior y contra la primera — todo en la
 base, no en el frontend. Se ve en Progreso (socio) y en la ficha (administrador).
+
+La **grasa corporal** salió del formulario: el gimnasio no tiene con qué medirla y un campo que
+nadie completa es ruido. La columna sigue en la base —tirarla obligaría a rehacer la
+restricción y la vista, y se perdería lo ya cargado— pero la aplicación no la escribe ni la
+muestra.
 
 **El aviso de vencimiento sale por WhatsApp desde el navegador.** No hay API ni token de
 Meta: el botón arma un enlace `wa.me` con el mensaje ya escrito y abre la app del celular o
@@ -199,9 +218,168 @@ Al usar el botón se guarda la fecha en `socios.ultimo_aviso_en` y la lista mues
 hace 2 días". Sin eso, al día siguiente el mostrador vuelve a abrir la misma lista y le escribe
 a los mismos.
 
-**La pantalla de Ingreso es la que vive abierta en el mostrador.** Se escribe la cédula,
-Enter, y en letras grandes aparece quién es y si puede pasar; la asistencia queda registrada
-en la misma acción y el foco vuelve solo al campo para el siguiente. A un socio vencido
+**El panel muestra a los que dejaron de venir, no solo a los que deben.** Cuando un socio
+aparece en "vencidos" ya decidió no volver: dejó de venir tres semanas antes y hasta ahora era
+invisible porque figuraba `AL_DIA`. La lista **Dejaron de venir** son los que están al día y
+pagando pero hace 10, 15, 21 o 30 días que no aparecen — se elige el corte en la misma
+pantalla. Ordena por vencimiento: primero el que además está por vencérsele el plan.
+
+El mensaje de WhatsApp es otro, a propósito: no le habla de plata —todavía está al día—, le
+pregunta cómo anda. Se anota en `socios.ultimo_aviso_ausencia_en`, que es una columna aparte
+de `ultimo_aviso_en`: son dos conversaciones distintas y haberle escrito por una no tiene que
+tapar la otra.
+
+**Los cumpleaños salen del dato que ya se cargaba.** `fecha_nacimiento` estaba en el alta y no
+se usaba para nada. El panel muestra quién cumple hoy y en los próximos 7 días, con el botón
+para saludar. El saludo no se registra: no hay riesgo de mandarlo dos veces. A los del 29 de
+febrero se los saluda el 28 en los años que no son bisiestos.
+
+**El comprobante de pago sale en PDF, con el logo.** Lleva los datos del gimnasio, el socio,
+el plan, el período, el método de pago y el importe en números y en letras (`Son: Guaraníes
+doscientos cincuenta mil`), que es lo que evita que a un 150.000 le agreguen un cero.
+
+Se baja desde **tres** lugares, a propósito:
+
+1. Apenas se termina de cobrar.
+2. En la ficha del socio, uno por cada pago.
+3. En el listado de socios, al lado del botón de WhatsApp: baja el del último cobro.
+
+El tercero es el que importa: si en el mostrador se olvidaron de bajarlo en el momento, no hay
+que rehacer nada ni entrar a buscar la ficha.
+
+Se **descarga**, no se abre en una pestaña. Abrirla no era confiable: `window.open` después de
+un `await` ya no cuenta como gesto del usuario y el bloqueador de emergentes se la comía, con
+lo cual el botón parecía no hacer nada. Bajado sirve igual para imprimirlo y para adjuntarlo.
+
+**El número de comprobante lo genera el sistema, no el mostrador.** Sale de `pagos.id`, que es
+un `serial PRIMARY KEY`: nunca se repite, ni siquiera si se borra un pago, y no hay forma de
+cargarlo a mano. Se muestra apenas se cobra (`Comprobante N.º 0000042`) y en el historial de
+pagos de la ficha.
+
+Antes el formulario de cobro tenía un campo "Comprobante" con el marcador *"N.º de recibo"*,
+que invitaba a escribir a mano un número que el sistema ya generaba — y dos cobros podían
+terminar con el mismo. Ahora ese campo se llama **N.º de operación**, es opcional, y solo
+aparece cuando el método no es efectivo: es el número que da el banco o la billetera, para
+cruzar con el extracto. **No se imprime** en el comprobante —es conciliación interna, no algo
+que le sirva al socio— pero sale en la planilla de cobros.
+
+> **No es una factura legal.** El propio PDF lo aclara en el pie. Es el papel que el socio se
+> lleva, no un documento tributario.
+
+Se arma con `pdfkit`, que es JavaScript puro: no hay que instalar nada nativo en la PC del
+gimnasio. **Los datos que dejes vacíos no se imprimen**: mejor una línea menos que un
+"Av. Ejemplo 123" de relleno en algo que ve el socio.
+
+### Si cambia el nombre, la dirección o el logo
+
+No hay un único lugar porque el comprobante lo arma el servidor, el título de la pestaña se
+resuelve antes de que arranque React y el logo lo necesitan los dos lados:
+
+| Qué | Dónde |
+|---|---|
+| Nombre, dirección y teléfono del comprobante | `GYM_NOMBRE`, `GYM_DIRECCION`, `GYM_TELEFONO` en `gym/.env` |
+| Nombre en la app (barra superior, login, mensajes de WhatsApp) | `client/src/marca.js` |
+| Título de la pestaña | `client/index.html` |
+| Nombre de la app instalada en el celular | `client/public/manifest.webmanifest` |
+| Logo del comprobante | `server/assets/logo.png` |
+| Logo de la app | `client/public/logo.png` |
+| Foto de fondo del login | `client/src/assets/fondo-login.jpg` |
+
+Los íconos de la PWA (`icono-192.png`, `icono-512.png`, `icono-512-mask.png`) siguen siendo los
+originales: para rehacerlos desde el logo hay que recortarlos a mano, el `maskable` con margen
+para que el sistema no le coma los bordes al recortarlo en círculo.
+
+**El login tiene la foto del gimnasio de fondo.** Se importa desde `src/` y no desde
+`public/` para que Vite le ponga hash y la deje en `/assets/`, que es lo único que el service
+worker cachea: así se baja una sola vez y no en cada visita. Encima lleva un velo oscuro, sin
+el cual los focos rojos de la foto pelean con el formulario.
+
+La imagen original era un PNG de 2 MB con el logo incrustado a la izquierda. Se recortó esa
+franja —en el login el logo ya va en el centro, no hacen falta dos— y se pasó a JPG: quedó en
+**166 KB**, doce veces más liviana, que sobre el WiFi del gimnasio es la diferencia entre que
+la pantalla de entrada aparezca al toque o después de unos segundos en blanco.
+
+> Donde el texto dice "el gimnasio" como sustantivo común —"las rutinas activas del gimnasio",
+> "veces que pasaste por el gimnasio"— se deja así a propósito: reemplazarlo por el nombre
+> propio queda forzado.
+
+**Las planillas se bajan en CSV, no en .xlsx.** Excel las abre con doble clic igual y no hace
+falta una dependencia para generar un formato binario que nadie va a editar a mano. Dos
+detalles hacen que se abran bien y no como una sola columna ilegible: **BOM UTF-8** al
+principio (si no, Excel muestra `MarÃ­a`) y **separador `;`** (en configuración regional
+española la coma es el separador decimal).
+
+- **Socios** — desde el listado. Baja todos, no la página que estás viendo, con plan, estado,
+  vencimiento, última asistencia y asistencias del mes.
+- **Cobros** — desde el panel, por rango de fechas; arranca en el primero del mes en curso.
+  El monto va sin separador de miles y con coma decimal, así Excel lo toma como número y se
+  puede sumar la columna, que es para lo que se baja.
+
+**El control de acceso está armado, pero el molinete todavía no.** El sistema ya hace todo el
+recorrido —huella → buscar socio → decidir → abrir o negar → registrar— contra un molinete
+**simulado**. Lo único que falta es el módulo que habla con el equipo Actuar, y está aislado en
+un solo archivo: `server/src/acceso/adaptadores/actuar.js`.
+
+Ese archivo está deliberadamente vacío, con la lista de lo que hay que pedirle al fabricante.
+No se inventaron comandos, ni velocidad de puerto, ni identificadores USB, ni el significado de
+los 4 pines: un adaptador que parece terminado y no anda es peor que uno que avisa que falta, y
+mandar bytes adivinados a un equipo que controla una puerta no es una opción.
+
+Cuál se usa lo decide `MOLINETE` en `gym/.env`:
+
+| valor | qué hace |
+|---|---|
+| `simulado` (por defecto) | sin hardware; la pantalla puede disparar lecturas de prueba |
+| `actuar` | el equipo real, cuando su adaptador esté completo |
+| `ninguno` | control de acceso apagado |
+
+Si el molinete no arranca, **el resto del sistema sigue funcionando**: se ve el error en el
+arranque y el mostrador registra ingresos a mano como siempre. Una puerta que no abre no puede
+dejar al gimnasio sin poder cobrar. Y mientras el adaptador esté sin implementar, la orden de
+apertura *lanza* en vez de fallar en silencio: es preferible que la puerta no abra y quede el
+error registrado, a que el sistema crea que abrió cuando no abrió.
+
+**La regla de quién pasa es una sola.** Vive en `server/src/acceso/decision.js` y la usan el
+molinete y el mostrador. Es una función pura —recibe una fila de `v_socios_estado`, devuelve la
+decisión— así que se prueba sin hardware y sin base. Antes estaba adentro del endpoint del
+mostrador; si el molinete hubiera traído su propia copia, tarde o temprano una iba a decir que
+sí y la otra que no para el mismo socio, y eso se discute con el socio parado en la puerta.
+
+**La huella no se guarda acá.** La plantilla queda adentro del equipo; en `socio_biometria` solo
+se anota el identificador que el lector devuelve y a qué socio corresponde. Un dato biométrico
+no tiene por qué estar en una base que se respalda a un pendrive. Un mismo identificador no
+puede apuntar a dos socios —lo impide la base— porque eso haría que la puerta le abra a la
+persona equivocada.
+
+**`asistencias` y `accesos` son cosas distintas.** `asistencias` es una fila por socio y día
+("vino hoy") y es lo que alimenta el panel y el progreso. `accesos` es la bitácora de la puerta:
+cada intento, autorizado o rechazado, con su motivo y de dónde vino. Un socio vencido que apoya
+el dedo tres veces deja tres filas en `accesos` y ninguna en `asistencias`.
+
+**La pantalla de Ingreso es la consola de la puerta.** Vive abierta todo el día en el mostrador
+y hace dos cosas a la vez: muestra en vivo lo que pasa en el molinete —autorizados y
+rechazados, con el motivo— y deja resolver a mano lo que el lector no pudo.
+
+La búsqueda acepta **cédula o nombre**. Si son solo dígitos, entra derecho: Enter y la
+asistencia queda registrada, que es el camino rápido de todos los días. Si tiene letras, busca
+por nombre y muestra las coincidencias para elegir. Con un nombre **siempre** se muestra la
+lista, aunque haya una sola coincidencia: registrar la entrada automáticamente por un nombre
+parcial es la forma de marcarle la asistencia a la persona equivocada.
+
+El cartel grande muestra lo último que pasó por el molinete, salvo que el mostrador esté
+consultando algo a mano, en cuyo caso manda esa consulta hasta que se toque "Siguiente".
+
+**Avisa del cumpleaños.** Si al socio le falta una semana o menos, el cartel lo muestra; el
+día es el mismo mostrador el que lo saluda. Más lejos que eso no se muestra: un "faltan 247
+días" no le sirve a nadie y le saca lugar a lo que sí importa. `fn_proximo_cumple` corre el
+29 de febrero al 28 en los años que no son bisiestos.
+
+**"Dejar pasar" es para el que no es socio.** Una visita o un día de prueba no tienen huella
+ni membresía, así que el molinete nunca los va a dejar entrar solo: lo autoriza el
+administrador desde el mostrador, con el nombre de la persona. Queda en `accesos` con
+`socio_id` nulo y el nombre en `visitante`, para poder responder después cuántos días de
+prueba se dieron —y cuántos terminaron en una venta, que es lo que hace que valga la pena
+registrarlos. A un socio vencido
 **no le registra la entrada automáticamente**: muestra el aviso en rojo con el botón para
 cobrarle, y "Dejar pasar igual" queda como una decisión explícita del administrador (el
 ingreso se guarda marcado como forzado).
@@ -223,9 +401,56 @@ botones de +15s y "Listo". No se reinicia si el socio solo está corrigiendo una
 cargada, y no aparece después de la última serie de un ejercicio. Ahí la miniatura es la
 animación, no una foto: se toca y se agranda.
 
-**El login es la cédula.** Al crear un socio, su contraseña inicial es su propia cédula y
-el sistema lo obliga a cambiarla la primera vez que entra. El admin puede reiniciarla desde
-la ficha del socio.
+**El mostrador entra con nombre de usuario; el socio, con su cédula.** El socio escribe el
+número que sabe de memoria y tiene en el bolsillo. Pero el mostrador es una cuenta del
+gimnasio, no de una persona: pedirle una cédula a una cuenta que se llama `Atletha` no tenía
+sentido, y el encabezado decía el nombre de quien la creó en vez del nombre del negocio.
+
+El campo del login acepta las dos cosas y el servidor las distingue solo, porque un nombre de
+usuario tiene que empezar con letra. Quien no tenga nombre de usuario sigue entrando con su
+cédula: nadie quedó afuera por el cambio, y el administrador puede usar cualquiera de las dos.
+
+```bash
+npm run admin:acceso -- --documento 1234567 --usuario Atletha --password ...
+npm run admin:acceso -- --usuario Atletha --password otra-clave
+```
+
+Cambiar la contraseña por ahí cierra las sesiones abiertas de esa cuenta.
+
+**El usuario es la cédula; la contraseña la pone el administrador.** En el alta hay un campo
+de contraseña obligatorio (mínimo 6 caracteres, con botón para mostrarla mientras se la
+dicta). El socio entra con esa y la conserva; puede cambiarla cuando quiera, no se le exige.
+Si se la olvida, se le escribe una nueva desde la ficha.
+
+Antes, si no se mandaba contraseña, la inicial era **la propia cédula**: un dato que está a la
+vista en el mostrador y que se puede adivinar, así que la cuenta quedaba abierta para cualquiera
+hasta que el socio entrara por primera vez. La cédula ya no es contraseña de nada.
+
+El servidor no devuelve nunca la contraseña en la respuesta del alta ni del reinicio: la acaba
+de escribir el administrador y no tiene por qué quedar dando vueltas.
+
+> Queda `usuarios.debe_cambiar_password` y el guardia que la hace cumplir: ningún alta la
+> activa, pero puede venir de un socio cargado antes de este cambio. Mientras esté prendida,
+> ese token entra a `/api/auth` y a nada más. Eso lo decide **la API**, no la pantalla — antes
+> lo frenaba solo un `<Navigate>` del frontend y el token servía igual por afuera.
+
+**Cambiar o reiniciar la contraseña cierra las demás sesiones.** El token no se podía revocar:
+dar de baja a un socio o reiniciarle la contraseña no lo sacaba, seguía entrando hasta que el
+token expirara (12 h). Ahora cada petición relee de la base si la cuenta sigue activa y compara
+la marca de sesión que el token lleva adentro contra `usuarios.tokens_validos_desde`.
+
+La marca va como dato propio del token y **no** se deduce de su `iat`: `iat` viene en segundos
+enteros, así que dos revocaciones dentro del mismo segundo son indistinguibles y el token que
+había que matar sobrevivía. Comparando por igualdad no hay ventana. Al que cambia su
+contraseña se le devuelve un token nuevo, así que no se cae de la app; los demás dispositivos
+quedan afuera.
+
+**El freno al login es por equipo y por cédula.** Dos limitadores: 20 intentos cada 10 minutos
+por IP y 10 por cédula. En los dos **solo cuentan los fallos**: la fuerza bruta son intentos
+fallidos, y contar los aciertos deja afuera al mostrador, que abre sesión varias veces al día. Con uno solo por IP alcanzaba con
+cambiar de dispositivo para seguir probando contra la misma cuenta. Y el servidor **no** confía
+en `X-Forwarded-For` (`trust proxy` en `false`): escucha directo en la LAN, así que ese header
+lo pone quien quiera. Si algún día se pone un proxy real adelante, hay que volver a activarlo.
 
 **Las renovaciones se encadenan.** Si el socio renueva antes de vencer, el período nuevo
 arranca al día siguiente del vencimiento vigente: no se regalan ni se pierden días. Una
@@ -274,6 +499,15 @@ servidor equivocado. El servidor avisa al arrancar si detecta algo ya respondien
 
 ## Licencia de las imágenes
 
-Las 1.324 animaciones y miniaturas son propiedad de [Gym visual](https://gymvisual.com/) y
-llegan desde el dataset de la carpeta hermana. Revisá `exercises-dataset-main/LICENSE` y
-`NOTICE.md` antes de publicar este sistema fuera de la red del gimnasio.
+Las 1.324 animaciones y miniaturas son propiedad de [Gym visual](https://gymvisual.com/).
+La licencia y el aviso de atribución viven junto a los archivos, en `gym/media/LICENSE` y
+`gym/media/NOTICE.md`: revisalos antes de publicar este sistema fuera de la red del gimnasio.
+
+---
+
+## Créditos
+
+Sistema desarrollado por **Minga Software** para Atletha Training.
+
+Las 1.324 animaciones y miniaturas del catálogo son propiedad de
+[Gym visual](https://gymvisual.com/); ver la sección de licencia más arriba.

@@ -4,7 +4,7 @@ import { Link } from 'react-router-dom';
 import { media } from '../api.js';
 
 /**
- * Card del catálogo — variante "Demostración" del prototipo.
+ * Card del catálogo, en versión demostración: manda la animación.
  *
  * El GIF es el contenido: con los nombres del dataset en inglés, la animación
  * es el único identificador que el socio reconoce sin traducir nada.
@@ -130,7 +130,7 @@ export function CardEjercicio({ ejercicio, onFavorito, onAgregar, to }) {
 }
 
 /**
- * Disposición densa reutilizada del prototipo "Ficha": el armador de rutinas
+ * Disposición densa, para listas largas: el armador de rutinas
  * del admin necesita ver especificaciones, no mirar el movimiento.
  */
 export function FilaEjercicio({ ejercicio, accion }) {

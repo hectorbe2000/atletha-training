@@ -14,6 +14,9 @@ export default defineConfig({
       // Asi la misma URL funciona en la PC del mostrador y en el celular.
       '/api': { target: API, changeOrigin: true },
       '/media': { target: API, changeOrigin: true },
+      // Las fotos de los socios: sin esto daban 404 en desarrollo y solo se
+      // veian con la build servida por Express.
+      '/uploads': { target: API, changeOrigin: true },
     },
   },
   build: { outDir: 'dist', sourcemap: false },

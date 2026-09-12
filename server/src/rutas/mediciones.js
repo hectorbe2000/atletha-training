@@ -26,7 +26,6 @@ const esquemaMedicion = z.object({
   socio_id: z.coerce.number().int().positive().optional(),
   fecha: z.string().date('Fecha inválida.').optional(),
   peso_kg: medida(500),
-  grasa_pct: medida(80),
   cuello_cm: medida(120),
   pecho_cm: medida(250),
   cintura_cm: medida(250),
@@ -36,8 +35,12 @@ const esquemaMedicion = z.object({
   notas: z.string().trim().max(500).optional().or(z.literal('')),
 });
 
+// La grasa corporal salió del formulario: el gimnasio no tiene con qué
+// medirla y un campo que nadie completa es ruido. La columna sigue en la base
+// —tirarla obligaría a rehacer la restricción y la vista, y se perdería lo ya
+// cargado— pero la aplicación no la escribe ni la muestra.
 const CAMPOS = [
-  'peso_kg', 'grasa_pct', 'cuello_cm', 'pecho_cm',
+  'peso_kg', 'cuello_cm', 'pecho_cm',
   'cintura_cm', 'cadera_cm', 'brazo_cm', 'muslo_cm',
 ];
 
@@ -51,7 +54,7 @@ rutasMediciones.get(
     const limite = Math.min(200, Math.max(1, Number.parseInt(req.query.limite, 10) || 60));
 
     const historial = await varias(
-      `SELECT id, fecha, peso_kg, grasa_pct, cuello_cm, pecho_cm, cintura_cm,
+      `SELECT id, fecha, peso_kg, cuello_cm, pecho_cm, cintura_cm,
               cadera_cm, brazo_cm, muslo_cm, notas, altura_cm, imc, categoria_imc,
               variacion_kg, variacion_total_kg
          FROM v_mediciones
@@ -109,12 +112,11 @@ rutasMediciones.post(
 
     const medicion = await una(
       `INSERT INTO mediciones
-         (socio_id, fecha, peso_kg, grasa_pct, cuello_cm, pecho_cm,
+         (socio_id, fecha, peso_kg, cuello_cm, pecho_cm,
           cintura_cm, cadera_cm, brazo_cm, muslo_cm, notas, registrado_por)
-       VALUES ($1, coalesce($2::date, current_date), $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+       VALUES ($1, coalesce($2::date, current_date), $3, $4, $5, $6, $7, $8, $9, $10, $11)
        ON CONFLICT (socio_id, fecha) DO UPDATE SET
          peso_kg    = coalesce(EXCLUDED.peso_kg,    mediciones.peso_kg),
-         grasa_pct  = coalesce(EXCLUDED.grasa_pct,  mediciones.grasa_pct),
          cuello_cm  = coalesce(EXCLUDED.cuello_cm,  mediciones.cuello_cm),
          pecho_cm   = coalesce(EXCLUDED.pecho_cm,   mediciones.pecho_cm),
          cintura_cm = coalesce(EXCLUDED.cintura_cm, mediciones.cintura_cm),

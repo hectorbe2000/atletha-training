@@ -1,7 +1,7 @@
 import { Router } from 'express';
 
 import { una, varias, query } from '../db.js';
-import { ruta } from '../http.js';
+import { noEncontrado, ruta } from '../http.js';
 import { autenticar, soloAdmin } from '../middleware/auth.js';
 
 export const rutasDashboard = Router();
@@ -29,7 +29,8 @@ rutasDashboard.get(
       `),
       una(`SELECT count(*)::int AS total FROM asistencias WHERE fecha = current_date`),
       varias(`
-        SELECT socio_id, codigo, nombre_completo, telefono, plan, fecha_fin, dias_restantes
+        SELECT socio_id, codigo, nombre_completo, telefono, plan, fecha_fin, dias_restantes,
+               dias_desde_aviso
           FROM v_socios_estado
          WHERE activo AND estado = 'POR_VENCER'
          ORDER BY fecha_fin
@@ -37,7 +38,7 @@ rutasDashboard.get(
       `),
       varias(`
         SELECT socio_id, codigo, nombre_completo, telefono, plan, fecha_fin,
-               (current_date - fecha_fin) AS dias_vencido
+               (current_date - fecha_fin) AS dias_vencido, dias_desde_aviso
           FROM v_socios_estado
          WHERE activo AND estado = 'VENCIDO'
          ORDER BY fecha_fin DESC
@@ -60,6 +61,110 @@ rutasDashboard.get(
     ]);
 
     res.json({ socios, cobranza, asistencia_hoy: asistenciaHoy.total, por_vencer: porVencer, vencidos, ingresos_mes: ingresosMes });
+  })
+);
+
+/**
+ * Socios que dejaron de venir.
+ *
+ * Los que estan al dia pero hace rato que no aparecen. Es la lista que de
+ * verdad recupera plata: cuando el socio cae en "vencido" ya se fue, y
+ * mientras tanto figura AL_DIA y nadie lo mira.
+ *
+ * No incluye a los que nunca vinieron y recien se anotaron: se les da margen
+ * de `dias` desde el alta antes de contarlos como ausentes.
+ */
+rutasDashboard.get(
+  '/ausentes',
+  ruta(async (req, res) => {
+    const dias = Math.min(120, Math.max(7, Number.parseInt(req.query.dias, 10) || 15));
+
+    res.json(
+      await varias(
+        `SELECT v.socio_id, v.codigo, v.nombre_completo, v.telefono, v.plan,
+                v.fecha_fin, v.dias_restantes, v.estado,
+                a.ultima_visita,
+                coalesce(current_date - a.ultima_visita, current_date - v.fecha_ingreso)::int
+                  AS dias_sin_venir,
+                (a.ultima_visita IS NULL) AS nunca_vino,
+                CASE WHEN s.ultimo_aviso_ausencia_en IS NOT NULL
+                     THEN (current_date - s.ultimo_aviso_ausencia_en::date) END AS dias_desde_aviso
+           FROM v_socios_estado v
+           JOIN socios s ON s.id = v.socio_id
+           LEFT JOIN LATERAL (
+             SELECT max(fecha) AS ultima_visita
+               FROM asistencias WHERE socio_id = v.socio_id
+           ) a ON true
+          WHERE v.activo
+            AND v.estado IN ('AL_DIA', 'POR_VENCER')
+            AND coalesce(a.ultima_visita, v.fecha_ingreso) <= current_date - $1::int
+          ORDER BY v.fecha_fin, dias_sin_venir DESC
+          LIMIT 50`,
+        [dias]
+      )
+    );
+  })
+);
+
+/**
+ * Cumpleaños de hoy y de los proximos dias.
+ *
+ * `fecha_nacimiento` ya se cargaba en el alta y no se usaba para nada. El
+ * 29 de febrero se saluda el 28 en los años que no son bisiestos.
+ */
+rutasDashboard.get(
+  '/cumpleanos',
+  ruta(async (req, res) => {
+    // Ojo con `|| 7`: dias=0 es "solo los de hoy" y es un pedido válido.
+    const pedido = Number.parseInt(req.query.dias, 10);
+    const dias = Math.min(30, Math.max(0, Number.isInteger(pedido) ? pedido : 7));
+
+    // En vez de reconstruir la fecha del próximo cumpleaños con aritmética de
+    // años, se recorren los días que vienen y se busca el que coincide en
+    // mes y día. Cruza el fin de año solo, sin casos especiales.
+    res.json(
+      await varias(
+        `SELECT v.socio_id, v.codigo, v.nombre_completo, v.telefono, v.estado,
+                s.fecha_nacimiento,
+                c.dia                                AS proximo,
+                (c.dia - current_date)::int          AS faltan,
+                (extract(year FROM c.dia) - extract(year FROM s.fecha_nacimiento))::int AS cumple
+           FROM v_socios_estado v
+           JOIN socios s ON s.id = v.socio_id
+           CROSS JOIN LATERAL (
+             SELECT d::date AS dia
+               FROM generate_series(current_date, current_date + $1::int, interval '1 day') d
+              WHERE to_char(d, 'MM-DD') = to_char(s.fecha_nacimiento, 'MM-DD')
+                 -- Los del 29 de febrero se saludan el 28 en los años que no
+                 -- son bisiestos (febrero de ese año tiene 28 días).
+                 OR (to_char(s.fecha_nacimiento, 'MM-DD') = '02-29'
+                     AND to_char(d, 'MM-DD') = '02-28'
+                     AND extract(day FROM date_trunc('year', d) + interval '2 months - 1 day') = 28)
+              ORDER BY d
+              LIMIT 1
+           ) c
+          WHERE v.activo AND s.fecha_nacimiento IS NOT NULL
+          ORDER BY c.dia, v.nombre_completo
+          LIMIT 30`,
+        [dias]
+      )
+    );
+  })
+);
+
+/** Deja constancia de que se le escribió por dejar de venir. */
+rutasDashboard.post(
+  '/ausentes/:socioId/aviso',
+  ruta(async (req, res) => {
+    const socioId = Number.parseInt(req.params.socioId, 10);
+    if (!Number.isInteger(socioId) || socioId <= 0) throw noEncontrado('Socio');
+
+    const socio = await una(
+      'UPDATE socios SET ultimo_aviso_ausencia_en = now() WHERE id = $1 RETURNING ultimo_aviso_ausencia_en',
+      [socioId]
+    );
+    if (!socio) throw noEncontrado('Socio');
+    res.json({ ok: true, ultimo_aviso_ausencia_en: socio.ultimo_aviso_ausencia_en });
   })
 );
 

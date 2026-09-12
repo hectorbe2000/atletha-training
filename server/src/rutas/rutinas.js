@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 
+import { idsDeEjercicios } from '../catalogo.js';
 import { una, varias, query, transaccion } from '../db.js';
 import { ErrorHttp, invalido, noEncontrado, ruta, validar } from '../http.js';
 import { autenticar, soloAdmin, socioAccesible } from '../middleware/auth.js';
@@ -125,6 +126,11 @@ async function leerRutina(rutinaId) {
 
 /** Inserta dias y ejercicios de una rutina ya creada. */
 async function escribirDias(c, rutinaId, dias) {
+  const idPorCodigo = await idsDeEjercicios(
+    c,
+    dias.flatMap((d) => d.ejercicios.map((e) => e.codigo))
+  );
+
   for (const [i, dia] of dias.entries()) {
     const { rows: [filaDia] } = await c.query(
       `INSERT INTO rutina_dias (rutina_id, orden, etiqueta, nota)
@@ -133,19 +139,13 @@ async function escribirDias(c, rutinaId, dias) {
     );
 
     for (const [j, ej] of dia.ejercicios.entries()) {
-      const { rows: [ejercicio] } = await c.query('SELECT id FROM ejercicios WHERE codigo = $1', [
-        ej.codigo,
-      ]);
-      if (!ejercicio) {
-        throw new ErrorHttp(400, `El ejercicio ${ej.codigo} no existe en el catálogo.`);
-      }
       await c.query(
         `INSERT INTO rutina_ejercicios
            (rutina_dia_id, ejercicio_id, orden, series, repeticiones, peso_sugerido, descanso_seg, nota)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
         [
           filaDia.id,
-          ejercicio.id,
+          idPorCodigo.get(ej.codigo),
           j + 1,
           ej.series,
           ej.repeticiones,
@@ -455,8 +455,13 @@ rutasRutinas.put(
   '/:id',
   ruta(async (req, res) => {
     const rutinaId = Number(req.params.id);
-    await rutinaEditable(req, rutinaId);
+    const rutina = await rutinaEditable(req, rutinaId);
     const d = validar(esquemaRutina, req.body);
+
+    // El socio_id del cuerpo solo lo decide el administrador. Para un socio se
+    // ignora y manda el dueño real de la rutina: si no, mandando el PUT de su
+    // propia rutina con el id de otro se la escribía en la cuenta ajena.
+    const socioDestino = req.usuario.rol === 'ADMIN' ? d.socio_id : rutina.socio_id;
 
     await transaccion(async (c) => {
       await c.query(
@@ -467,7 +472,7 @@ rutasRutinas.put(
           WHERE id = $1`,
         [
           rutinaId,
-          d.socio_id,
+          socioDestino,
           d.nombre,
           d.descripcion || null,
           d.objetivo || null,

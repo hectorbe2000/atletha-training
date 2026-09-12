@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Navigate, useNavigate } from 'react-router-dom';
 
-import { api } from '../api.js';
+import { api, guardarToken } from '../api.js';
 import { useAuth } from '../auth.jsx';
 import { Aviso, Campo, Cargando } from '../componentes/ui.jsx';
 
@@ -29,10 +29,13 @@ export function CambiarPassword() {
     }
     setEnviando(true);
     try {
-      await api.post('/api/auth/cambiar-password', {
+      const r = await api.post('/api/auth/cambiar-password', {
         password_actual: actual,
         password_nueva: nueva,
       });
+      // Cambiar la contraseña invalida las sesiones abiertas, incluida esta:
+      // el servidor devuelve un token nuevo para no dejarnos afuera.
+      if (r?.token) guardarToken(r.token);
       await refrescar();
       navegar('/', { replace: true });
     } catch (err) {

@@ -1,6 +1,7 @@
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 
 import { useAuth } from '../auth.jsx';
+import { LOGO, NOMBRE_GIMNASIO } from '../marca.js';
 import { InsigniaEstado } from './ui.jsx';
 
 const NAV_SOCIO = [
@@ -49,10 +50,16 @@ export function Layout() {
       <header className="sticky top-0 z-30 border-b border-borde bg-fondo/85 backdrop-blur">
         <div className="mx-auto flex max-w-6xl items-center gap-3 px-4 py-3">
           <span className="flex items-center gap-2 font-semibold tracking-tight">
-            <span className="grid h-7 w-7 place-items-center rounded-lg bg-acento text-[13px] text-acento-texto">
-              G
-            </span>
-            <span className="hidden sm:inline">Gimnasio</span>
+            {/* El logo viene sobre fondo blanco: se le pone la base blanca para
+                que no quede un recuadro raro sobre el tema oscuro. */}
+            <img
+              src={LOGO}
+              alt={NOMBRE_GIMNASIO}
+              width={28}
+              height={28}
+              className="h-7 w-7 flex-none rounded-lg bg-white object-contain p-0.5"
+            />
+            <span className="hidden sm:inline">{NOMBRE_GIMNASIO}</span>
           </span>
 
           {/* Navegación de escritorio */}
@@ -76,8 +83,10 @@ export function Layout() {
           <div className="ml-auto flex items-center gap-3">
             {membresia && <InsigniaEstado estado={membresia.estado} dias={membresia.dias_restantes} />}
             <div className="hidden text-right sm:block">
+              {/* El mostrador es una cuenta del gimnasio, no de una persona:
+                  si tiene nombre de usuario, se muestra ese. */}
               <p className="text-[13px] font-medium leading-tight">
-                {usuario?.nombre} {usuario?.apellido}
+                {usuario?.nombre_usuario ?? `${usuario?.nombre ?? ''} ${usuario?.apellido ?? ''}`.trim()}
               </p>
               <p className="text-[11.5px] leading-tight text-texto-tenue">
                 {esAdmin ? 'Administrador' : `CI ${usuario?.documento}`}

@@ -30,10 +30,39 @@ export function Entrenar() {
   useEffect(() => {
     if (!dia) return;
     let vivo = true;
-    api
-      .post('/api/entrenamiento/sesiones', { rutina_dia_id: dia.id })
-      .then((s) => vivo && setSesion(s))
-      .catch((e) => vivo && setErrorGuardado(e.message));
+
+    (async () => {
+      try {
+        const s = await api.post('/api/entrenamiento/sesiones', { rutina_dia_id: dia.id });
+
+        // El servidor reutiliza la sesión que ya estaba abierta hoy. Sin
+        // volver a pedir lo cargado, el socio que recarga la página o vuelve
+        // a entrar veía 0 series y volumen 0 aunque estuviera todo guardado:
+        // no tenía forma de saber por dónde iba.
+        let cargadas = {};
+        if (s.reutilizada) {
+          const detalle = await api.get(`/api/entrenamiento/sesiones/${s.id}`);
+          cargadas = Object.fromEntries(
+            (detalle.series ?? []).map((sr) => [
+              `${sr.codigo}-${sr.numero_serie}`,
+              {
+                peso: sr.peso ?? '',
+                reps: sr.repeticiones ?? '',
+                guardada: sr.completada,
+              },
+            ])
+          );
+        }
+
+        if (!vivo) return;
+        // Los dos juntos: las filas se montan con lo ya cargado adentro.
+        setSeries(cargadas);
+        setSesion(s);
+      } catch (e) {
+        if (vivo) setErrorGuardado(e.message);
+      }
+    })();
+
     return () => {
       vivo = false;
     };
@@ -92,6 +121,10 @@ export function Entrenar() {
   if (cargando) return <Cargando texto="Preparando el entrenamiento…" />;
   if (error) return <Aviso tipo="error">{error.message}</Aviso>;
   if (!dia) return null;
+  // Se espera a tener la sesión para que las filas se monten con las series
+  // ya registradas. Si la sesión no abre, se sigue de largo y las filas
+  // quedan deshabilitadas con el error arriba.
+  if (!sesion && !errorGuardado) return <Cargando texto="Abriendo la sesión…" />;
 
   return (
     <div className="pb-4">
@@ -269,8 +302,10 @@ function FilaSerie({ numero: n, ejercicio, estado, onGuardar, deshabilitado }) {
   const sugeridoPeso = ejercicio.ultimo_peso ?? ejercicio.peso_sugerido ?? '';
   const sugeridoReps = /^\d+$/.test(ejercicio.repeticiones) ? ejercicio.repeticiones : '';
 
-  const [peso, setPeso] = useState(String(sugeridoPeso ?? ''));
-  const [reps, setReps] = useState(String(sugeridoReps ?? ''));
+  // Si la serie ya estaba registrada (sesión retomada), manda lo que quedó
+  // guardado; recién si no, la sugerencia.
+  const [peso, setPeso] = useState(() => String(estado?.peso ?? sugeridoPeso ?? ''));
+  const [reps, setReps] = useState(() => String(estado?.reps ?? sugeridoReps ?? ''));
   const refPeso = useRef(null);
   const guardada = Boolean(estado?.guardada);
 

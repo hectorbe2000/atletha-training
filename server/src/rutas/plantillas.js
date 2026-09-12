@@ -1,8 +1,9 @@
 import { Router } from 'express';
 import { z } from 'zod';
 
+import { idsDeEjercicios } from '../catalogo.js';
 import { una, varias, query, transaccion } from '../db.js';
-import { ErrorHttp, noEncontrado, ruta, validar } from '../http.js';
+import { noEncontrado, ruta, validar } from '../http.js';
 import { autenticar, soloAdmin } from '../middleware/auth.js';
 
 export const rutasPlantillas = Router();
@@ -72,21 +73,30 @@ async function leerPlantilla(id) {
 }
 
 async function escribirDias(c, plantillaId, dias) {
+  const idPorCodigo = await idsDeEjercicios(
+    c,
+    dias.flatMap((d) => d.ejercicios.map((e) => e.codigo))
+  );
+
   for (const [i, dia] of dias.entries()) {
     const { rows: [fila] } = await c.query(
       'INSERT INTO plantilla_dias (plantilla_id, orden, etiqueta, nota) VALUES ($1,$2,$3,$4) RETURNING id',
       [plantillaId, i + 1, dia.etiqueta, dia.nota || null]
     );
     for (const [j, ej] of dia.ejercicios.entries()) {
-      const { rows: [ejercicio] } = await c.query('SELECT id FROM ejercicios WHERE codigo = $1', [
-        ej.codigo,
-      ]);
-      if (!ejercicio) throw new ErrorHttp(400, `El ejercicio ${ej.codigo} no existe.`);
       await c.query(
         `INSERT INTO plantilla_ejercicios
            (plantilla_dia_id, ejercicio_id, orden, series, repeticiones, descanso_seg, nota)
          VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-        [fila.id, ejercicio.id, j + 1, ej.series, ej.repeticiones, ej.descanso_seg, ej.nota || null]
+        [
+          fila.id,
+          idPorCodigo.get(ej.codigo),
+          j + 1,
+          ej.series,
+          ej.repeticiones,
+          ej.descanso_seg,
+          ej.nota || null,
+        ]
       );
     }
   }

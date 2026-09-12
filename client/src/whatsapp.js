@@ -1,4 +1,5 @@
 import { fecha } from './api.js';
+import { NOMBRE_GIMNASIO } from './marca.js';
 
 /**
  * Avisos por WhatsApp.
@@ -8,8 +9,8 @@ import { fecha } from './api.js';
  * revisa y toca enviar.
  */
 
-/** Cambiá esto por el nombre real del gimnasio: aparece en cada mensaje. */
-export const NOMBRE_GIMNASIO = 'el gimnasio';
+// El nombre vive en marca.js: se usa en toda la app, no solo acá.
+export { NOMBRE_GIMNASIO };
 
 /**
  * "de el gimnasio" no se dice. Se contrae cuando el nombre arranca con
@@ -104,6 +105,47 @@ export function mensajeVencimiento(socio) {
         `${plan[0].toUpperCase() + plan.slice(1)} está al día hasta el ${fecha(socio.fecha_fin)}.`
       );
   }
+}
+
+/**
+ * Mensaje para el socio que dejó de venir.
+ *
+ * No se le menciona el vencimiento: todavía está al día. Lo que se quiere es
+ * que vuelva, y nombrarle la plata suena a cobranza.
+ */
+export function mensajeAusencia(socio) {
+  const nombre = (socio.nombre_completo ?? '').split(' ')[0];
+  const dias = socio.dias_sin_venir ?? 0;
+
+  if (socio.nunca_vino) {
+    return (
+      `Hola ${nombre}! Te escribimos ${DE_GIMNASIO}. ` +
+      `Vimos que todavía no arrancaste y tu plan ya está activo. ` +
+      `Si querés te armamos una rutina para el primer día. ¿Cuándo te viene bien pasar?`
+    );
+  }
+
+  const cuanto =
+    dias >= 60 ? 'hace un buen tiempo'
+    : dias >= 30 ? 'hace más de un mes'
+    : dias >= 21 ? 'hace tres semanas'
+    : dias >= 14 ? 'hace dos semanas'
+    : `hace ${dias} días`;
+
+  return (
+    `Hola ${nombre}! Te escribimos ${DE_GIMNASIO}. ` +
+    `Notamos que ${cuanto} que no te vemos por acá y queríamos saber cómo andás. ` +
+    `Tu plan sigue activo, así que cuando quieras retomás. ¡Te esperamos!`
+  );
+}
+
+/** Saludo de cumpleaños. */
+export function mensajeCumpleanos(socio) {
+  const nombre = (socio.nombre_completo ?? '').split(' ')[0];
+  const hoy = (socio.faltan ?? 0) === 0;
+  return hoy
+    ? `¡Feliz cumpleaños, ${nombre}! 🎉 Te saludamos ${DE_GIMNASIO}. Que tengas un gran día. ¡Te esperamos para entrenar!`
+    : `Hola ${nombre}! Te saludamos ${DE_GIMNASIO} por tu cumpleaños. ¡Que lo pases muy bien!`;
 }
 
 /** URL de wa.me con el mensaje ya cargado. */

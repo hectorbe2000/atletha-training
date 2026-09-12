@@ -3,19 +3,25 @@
  * cobro -> catalogo -> rutina -> entrenamiento -> progreso) contra un
  * servidor ya levantado, y limpia lo que creo.
  *
- *   node scripts/prueba-humo.js [--url http://localhost:4000] [--admin 1234567] [--password admin123]
+ *   node scripts/prueba-humo.js [--url http://localhost:4000] [--admin Atletha] [--password ...]
  */
+import { inflateSync } from 'node:zlib';
+
 const arg = (n, d) => {
   const i = process.argv.indexOf(`--${n}`);
   return i !== -1 && process.argv[i + 1] ? process.argv[i + 1] : d;
 };
 
 const URL_BASE = arg('url', 'http://localhost:4000');
-const ADMIN = arg('admin', '1234567');
-const PASSWORD = arg('password', 'admin123');
+// Credenciales del mostrador. Se pueden pasar por linea de comandos o por
+// variable de entorno; el valor por defecto es el del gimnasio.
+const ADMIN = arg('admin', process.env.PRUEBA_ADMIN ?? 'Atletha');
+const PASSWORD = arg('password', process.env.PRUEBA_PASSWORD ?? 'atlethaadmin2026');
 // Cedula ficticia y alta para no chocar con socios reales.
 const CEDULA_PRUEBA = arg('cedula', '99000001');
 const CEDULA_PRUEBA_2 = '99000002';
+// La que elige el socio de prueba cuando el sistema le exige cambiar la inicial.
+const PASSWORD_SOCIO = 'prueba1234';
 
 let tokenAdmin = null;
 let tokenSocio = null;
@@ -39,6 +45,52 @@ async function pedir(metodo, ruta, { token, cuerpo } = {}) {
     datos = texto;
   }
   return { estado: res.status, datos };
+}
+
+/**
+ * Como `pedir`, pero sin intentar parsear JSON: sirve para lo que no lo es
+ * (el comprobante en PDF, las planillas para Excel).
+ */
+async function pedirCrudo(metodo, ruta, token) {
+  const res = await fetch(`${URL_BASE}${ruta}`, {
+    method: metodo,
+    headers: token ? { authorization: `Bearer ${token}` } : {},
+  });
+  // Los bytes crudos, no `res.text()`: al decodificar UTF-8 el navegador se
+  // come el BOM, que es justamente lo que hay que verificar en las planillas.
+  const bytes = Buffer.from(await res.arrayBuffer());
+  return {
+    estado: res.status,
+    tipo: res.headers.get('content-type'),
+    nombre: res.headers.get('content-disposition'),
+    bytes,
+    texto: bytes.toString('utf8').replace(/^﻿/, ''),
+  };
+}
+
+/**
+ * Saca el texto de un PDF de pdfkit: infla los streams y junta las cadenas
+ * hexadecimales de los operadores de texto. Alcanza para comprobar que lo
+ * impreso dice lo que tiene que decir.
+ */
+function textoDePdf(bytes) {
+  const s = bytes.toString('latin1');
+  let contenido = '';
+  const re = /stream\r?\n/g;
+  let m;
+  while ((m = re.exec(s)) !== null) {
+    const ini = m.index + m[0].length;
+    const fin = s.indexOf('endstream', ini);
+    try {
+      const t = inflateSync(bytes.subarray(ini, fin)).toString('latin1');
+      if (/T[jJ]/.test(t)) contenido += t;
+    } catch {
+      /* no era un stream de texto */
+    }
+  }
+  return [...contenido.matchAll(/<([0-9a-fA-F]+)>/g)]
+    .map((h) => Buffer.from(h[1], 'hex').toString('latin1'))
+    .join(' | ');
 }
 
 function verificar(descripcion, condicion, extra) {
@@ -73,6 +125,13 @@ async function main() {
     cuerpo: { documento: ADMIN, password: 'clave-incorrecta' },
   });
   verificar('rechaza contraseña incorrecta', malo.estado === 401, malo.datos);
+
+  // El mostrador entra con nombre de usuario; el socio, con su cedula.
+  verificar(
+    'el administrador entra con su nombre de usuario',
+    /^[A-Za-z]/.test(ADMIN) && login.datos?.usuario?.nombre_usuario,
+    login.datos?.usuario?.nombre_usuario
+  );
 
   const sinToken = await pedir('GET', '/api/socios');
   verificar('bloquea /api/socios sin token', sinToken.estado === 401);
@@ -137,10 +196,22 @@ async function main() {
   const planMensual = planes.datos?.find((p) => p.nombre === 'Mensual');
 
   await pedir('GET', `/api/socios?buscar=${CEDULA_PRUEBA}`, { token: tokenAdmin }); // calienta
+
+  const sinPassword = await pedir('POST', '/api/socios', {
+    token: tokenAdmin,
+    cuerpo: { documento: CEDULA_PRUEBA, nombre: 'Sin', apellido: 'Clave' },
+  });
+  verificar(
+    'no deja crear un socio sin contraseña',
+    sinPassword.estado === 400,
+    sinPassword.datos
+  );
+
   const alta = await pedir('POST', '/api/socios', {
     token: tokenAdmin,
     cuerpo: {
       documento: CEDULA_PRUEBA,
+      password: PASSWORD_SOCIO,
       nombre: 'Socio',
       apellido: 'De Prueba',
       telefono: '0981000000',
@@ -159,22 +230,49 @@ async function main() {
     alta.datos.membresia
   );
 
+  // El numero de comprobante lo genera la base (pagos.id es serial): no se
+  // carga a mano y no se puede repetir.
+  verificar(
+    'el cobro devuelve un número de comprobante generado',
+    /^\d{7}$/.test(alta.datos.membresia?.comprobante_nro ?? ''),
+    alta.datos.membresia?.comprobante_nro
+  );
+
   const duplicado = await pedir('POST', '/api/socios', {
     token: tokenAdmin,
-    cuerpo: { documento: CEDULA_PRUEBA, nombre: 'Otro', apellido: 'Igual' },
+    cuerpo: { documento: CEDULA_PRUEBA, password: PASSWORD_SOCIO, nombre: 'Otro', apellido: 'Igual' },
   });
   verificar('rechaza cédula duplicada', duplicado.estado === 409, duplicado.datos);
 
   // --- login del socio ---------------------------------------------------
-  const loginSocio = await pedir('POST', '/api/auth/login', {
+  // La cedula ya no es contrasena de nada: la pone el administrador en el alta.
+  const conCedula = await pedir('POST', '/api/auth/login', {
     cuerpo: { documento: CEDULA_PRUEBA, password: CEDULA_PRUEBA },
   });
+  verificar('la cédula no sirve como contraseña', conCedula.estado === 401, conCedula.estado);
+
+  const loginSocio = await pedir('POST', '/api/auth/login', {
+    cuerpo: { documento: CEDULA_PRUEBA, password: PASSWORD_SOCIO },
+  });
   verificar(
-    'el socio entra con su cédula como contraseña inicial',
-    loginSocio.estado === 200 && loginSocio.datos?.usuario?.debe_cambiar_password === true,
+    'el socio entra con la contraseña que le puso el administrador',
+    loginSocio.estado === 200 && loginSocio.datos?.usuario?.debe_cambiar_password === false,
     loginSocio.datos
   );
   tokenSocio = loginSocio.datos?.token;
+
+  // Ningun alta deja activada la marca de "tiene que elegir contrasena", pero
+  // puede venir de un socio cargado antes de este cambio. El guardia vive en
+  // la API y no en la pantalla, asi que se prueba prendiendola a mano.
+  const { query: sql } = await import('../src/db.js');
+  await sql('UPDATE usuarios SET debe_cambiar_password = true WHERE documento = $1', [CEDULA_PRUEBA]);
+  const pendiente = await pedir('GET', '/api/rutinas', { token: tokenSocio });
+  verificar(
+    'con el cambio de contraseña pendiente la API no deja hacer nada más',
+    pendiente.estado === 403 && pendiente.datos?.detalle?.debe_cambiar_password === true,
+    pendiente.datos
+  );
+  await sql('UPDATE usuarios SET debe_cambiar_password = false WHERE documento = $1', [CEDULA_PRUEBA]);
 
   const yo = await pedir('GET', '/api/auth/yo', { token: tokenSocio });
   verificar('el socio ve su membresía AL_DIA', yo.datos?.membresia?.estado === 'AL_DIA', yo.datos?.membresia);
@@ -182,7 +280,7 @@ async function main() {
   // Segundo socio, para probar de verdad el aislamiento entre cuentas.
   const otro = await pedir('POST', '/api/socios', {
     token: tokenAdmin,
-    cuerpo: { documento: CEDULA_PRUEBA_2, nombre: 'Otro', apellido: 'Socio' },
+    cuerpo: { documento: CEDULA_PRUEBA_2, password: PASSWORD_SOCIO, nombre: 'Otro', apellido: 'Socio' },
   });
   verificar('alta del segundo socio', otro.estado === 201, otro.datos);
 
@@ -204,6 +302,16 @@ async function main() {
     cuerpo: { plan_id: planMensual?.id, metodo: 'TRANSFERENCIA' },
   });
   verificar('renovación crea un segundo período', renovacion.estado === 201, renovacion.datos);
+
+  verificar(
+    'el segundo cobro recibe un número de comprobante distinto',
+    renovacion.datos?.membresia?.comprobante_nro &&
+      renovacion.datos.membresia.comprobante_nro !== alta.datos.membresia?.comprobante_nro,
+    {
+      primero: alta.datos.membresia?.comprobante_nro,
+      segundo: renovacion.datos?.membresia?.comprobante_nro,
+    }
+  );
   verificar(
     'la renovación empieza al día siguiente del vencimiento (no pisa el período vigente)',
     renovacion.datos?.membresia?.fecha_inicio > alta.datos.membresia?.fecha_fin,
@@ -320,6 +428,23 @@ async function main() {
   });
   verificar('el socio quita un ejercicio de su rutina', quitado.estado === 200, quitado.datos);
 
+  // El PUT reemplaza la rutina entera y el cuerpo trae socio_id. Para un
+  // socio ese campo se ignora: si no, mandaba el PUT de su propia rutina con
+  // el id de otro y se la escribia en la cuenta ajena.
+  const secuestro = await pedir('PUT', `/api/rutinas/${rutinaPropia.datos.id}`, {
+    token: tokenSocio,
+    cuerpo: {
+      socio_id: otro.datos?.socio_id,
+      nombre: 'Rutina mudada',
+      dias: [{ etiqueta: 'Lunes', ejercicios: [{ codigo: '0032' }] }],
+    },
+  });
+  verificar(
+    'el socio no puede mudarle su rutina a otra cuenta',
+    secuestro.estado === 200 && secuestro.datos?.socio_id === socioId,
+    { estado: secuestro.estado, socio_id: secuestro.datos?.socio_id, esperado: socioId }
+  );
+
   const borrada = await pedir('DELETE', `/api/rutinas/${rutinaPropia.datos.id}`, { token: tokenSocio });
   verificar('el socio borra su propia rutina', borrada.estado === 200, borrada.datos);
 
@@ -405,6 +530,11 @@ async function main() {
     bajaEnMostrador.datos?.permitido === false && bajaEnMostrador.datos?.motivo === 'INACTIVO',
     bajaEnMostrador.datos
   );
+
+  // Dar de baja tiene que cortar la sesion en el acto, no cuando expire el
+  // token: el estado se relee de la base en cada peticion.
+  const conBaja = await pedir('GET', '/api/rutinas', { token: tokenSocio });
+  verificar('el token de un socio dado de baja deja de valer', conBaja.estado === 401, conBaja.estado);
 
   await pedir('PATCH', `/api/socios/${socioId}`, { token: tokenAdmin, cuerpo: { activo: true } });
 
@@ -603,21 +733,240 @@ async function main() {
   );
   verificar('el panel trae 12 meses de ingresos', panel.datos?.ingresos_mes?.length === 12, panel.datos?.ingresos_mes?.length);
 
+  // --- socios que dejaron de venir --------------------------------------
+  // El de prueba entro hoy, asi que no tiene que figurar como ausente.
+  const ausentes = await pedir('GET', '/api/dashboard/ausentes?dias=15', { token: tokenAdmin });
+  verificar(
+    'la lista de ausentes no incluye al que vino hoy',
+    Array.isArray(ausentes.datos) && !ausentes.datos.some((s) => s.socio_id === socioId),
+    ausentes.datos?.length
+  );
+
+  const avisoAusencia = await pedir('POST', `/api/dashboard/ausentes/${socioId}/aviso`, {
+    token: tokenAdmin,
+  });
+  verificar(
+    'registra el aviso al socio que dejó de venir',
+    avisoAusencia.estado === 200 && Boolean(avisoAusencia.datos?.ultimo_aviso_ausencia_en),
+    avisoAusencia.datos
+  );
+
+  const ausenteAjeno = await pedir('GET', '/api/dashboard/ausentes', { token: tokenSocio });
+  verificar('un socio no ve la lista de ausentes', ausenteAjeno.estado === 403);
+
+  // --- cumpleanos --------------------------------------------------------
+  // Se le pone la fecha de hoy al socio de prueba y tiene que aparecer.
+  const { query: sql2 } = await import('../src/db.js');
+  await sql2(
+    `UPDATE socios SET fecha_nacimiento = make_date(1990,
+        extract(month FROM current_date)::int, extract(day FROM current_date)::int)
+      WHERE id = $1`,
+    [socioId]
+  );
+  const cumples = await pedir('GET', '/api/dashboard/cumpleanos?dias=0', { token: tokenAdmin });
+  const cumpleHoy = cumples.datos?.find?.((s) => s.socio_id === socioId);
+  verificar(
+    'el que cumple hoy aparece con los años que cumple',
+    cumpleHoy?.faltan === 0 && cumpleHoy?.cumple > 0,
+    cumpleHoy
+  );
+
+  // --- comprobante de pago ----------------------------------------------
+  const cobros = await pedir('GET', `/api/socios/${socioId}`, { token: tokenAdmin });
+  const pagoId = cobros.datos?.pagos?.[0]?.id;
+  const comprobante = await pedirCrudo('GET', `/api/pagos/${pagoId}/comprobante`, tokenAdmin);
+  verificar(
+    'el comprobante sale en PDF',
+    comprobante.estado === 200 &&
+      comprobante.tipo?.includes('pdf') &&
+      comprobante.texto.startsWith('%PDF'),
+    { estado: comprobante.estado, tipo: comprobante.tipo }
+  );
+
+  // La fecha del pago es timestamptz y pg la devuelve como Date, no como
+  // texto: cortarle 10 caracteres daba "Fecha: undefined/undefined/Thu Aug 13".
+  verificar(
+    'el comprobante imprime la fecha en dd/mm/aaaa',
+    /\d{2}\/\d{2}\/\d{4}/.test(textoDePdf(comprobante.bytes)) &&
+      !textoDePdf(comprobante.bytes).includes('undefined'),
+    textoDePdf(comprobante.bytes).match(/\d{2}\/\d{2}\/\d{4}[^|]*/)?.[0]
+  );
+
+  const comprobanteAjeno = await pedir('GET', `/api/pagos/${pagoId}/comprobante`, {
+    token: tokenSocio,
+  });
+  verificar('un socio no puede bajar comprobantes', comprobanteAjeno.estado === 403);
+
+  // El listado trae el último pago de cada socio para poder bajar el
+  // comprobante sin entrar a la ficha.
+  const listado = await pedir('GET', `/api/socios?buscar=${CEDULA_PRUEBA}`, { token: tokenAdmin });
+  verificar(
+    'el listado de socios trae el id del último pago',
+    listado.datos?.datos?.[0]?.ultimo_pago_id === pagoId,
+    { trae: listado.datos?.datos?.[0]?.ultimo_pago_id, esperado: pagoId }
+  );
+
+  // --- planillas para Excel ---------------------------------------------
+  const planillaSocios = await pedirCrudo('GET', '/api/socios/exportar', tokenAdmin);
+  verificar(
+    'la planilla de socios sale con BOM y separador ; (Excel la abre bien)',
+    planillaSocios.estado === 200 &&
+      planillaSocios.bytes.subarray(0, 3).toString('hex') === 'efbbbf' &&
+      planillaSocios.texto.split('\r\n')[0].includes(';'),
+    planillaSocios.bytes?.subarray(0, 3).toString('hex')
+  );
+  verificar(
+    'la planilla de socios incluye al socio de prueba',
+    planillaSocios.texto.includes(CEDULA_PRUEBA),
+    null
+  );
+
+  const planillaPagos = await pedirCrudo(
+    'GET',
+    '/api/pagos/exportar?desde=2020-01-01',
+    tokenAdmin
+  );
+  verificar(
+    'la planilla de cobros sale con los pagos del rango',
+    planillaPagos.estado === 200 && planillaPagos.texto.split('\r\n').length > 1,
+    planillaPagos.texto?.split('\r\n')?.[0]
+  );
+
+  // --- control de acceso por molinete -----------------------------------
+  // Todo esto corre contra el molinete simulado: el flujo completo tiene que
+  // andar sin hardware, que es justamente el punto de la arquitectura.
+  const accesoEstado = await pedir('GET', '/api/acceso/estado', { token: tokenAdmin });
+  const haySimulador = accesoEstado.datos?.molinete?.nombre === 'simulado';
+  verificar(
+    'el control de acceso arranca con el molinete simulado',
+    accesoEstado.estado === 200 && accesoEstado.datos?.activo === true,
+    accesoEstado.datos?.molinete
+  );
+
+  if (haySimulador) {
+    const huella = await pedir('POST', '/api/acceso/biometria', {
+      token: tokenAdmin,
+      cuerpo: { socio_id: socioId, biometria_id: `HUM-${CEDULA_PRUEBA}`, etiqueta: 'prueba' },
+    });
+    verificar('asocia una huella a un socio', huella.estado === 201, huella.datos);
+
+    const repetida = await pedir('POST', '/api/acceso/biometria', {
+      token: tokenAdmin,
+      cuerpo: { socio_id: otro.datos?.socio_id, biometria_id: `HUM-${CEDULA_PRUEBA}` },
+    });
+    verificar(
+      'no deja asignar la misma huella a dos socios',
+      repetida.estado === 409,
+      repetida.datos
+    );
+
+    // El socio de prueba está al día en este punto: la puerta tiene que abrir.
+    const pasa = await pedir('POST', '/api/acceso/simular', {
+      token: tokenAdmin,
+      cuerpo: { biometria_id: `HUM-${CEDULA_PRUEBA}` },
+    });
+    verificar(
+      'la huella de un socio al día abre el molinete',
+      pasa.datos?.permitido === true && pasa.datos?.abrio === true,
+      { permitido: pasa.datos?.permitido, motivo: pasa.datos?.motivo }
+    );
+
+    const desconocida = await pedir('POST', '/api/acceso/simular', {
+      token: tokenAdmin,
+      cuerpo: { biometria_id: 'HUM-NO-EXISTE' },
+    });
+    verificar(
+      'una huella desconocida NO abre y queda registrada',
+      desconocida.datos?.permitido === false && desconocida.datos?.motivo === 'NO_RECONOCIDO',
+      desconocida.datos?.motivo
+    );
+
+    const bitacora = await pedir('GET', '/api/acceso/registros?limite=10', { token: tokenAdmin });
+    verificar(
+      'la bitácora guarda el rechazo con su motivo',
+      bitacora.datos?.some((a) => a.motivo === 'NO_RECONOCIDO' && a.permitido === false),
+      bitacora.datos?.slice(0, 2)
+    );
+
+    const ajeno = await pedir('GET', '/api/acceso/registros', { token: tokenSocio });
+    verificar('un socio no ve la bitácora de la puerta', ajeno.estado === 403);
+
+    // Visitas y dias de prueba: gente que no es socio y entra igual.
+    const visita = await pedir('POST', '/api/acceso/visita', {
+      token: tokenAdmin,
+      cuerpo: { nombre: 'Visitante De Prueba', tipo: 'DIA_DE_PRUEBA', nota: 'prueba de humo' },
+    });
+    verificar(
+      'deja pasar a alguien que no es socio y lo registra con su nombre',
+      visita.estado === 201 && visita.datos?.visitante === 'Visitante De Prueba',
+      visita.datos
+    );
+
+    const conVisita = await pedir('GET', '/api/acceso/registros?limite=5', { token: tokenAdmin });
+    verificar(
+      'la visita aparece en la bitácora sin socio asociado',
+      conVisita.datos?.some(
+        (a) => a.visitante === 'Visitante De Prueba' && a.socio_id === null && a.permitido
+      ),
+      conVisita.datos?.[0]
+    );
+
+    const visitaSinNombre = await pedir('POST', '/api/acceso/visita', {
+      token: tokenAdmin,
+      cuerpo: { tipo: 'VISITA' },
+    });
+    verificar('no deja registrar una visita sin nombre', visitaSinNombre.estado === 400);
+
+    if (huella.datos?.id) {
+      await pedir('DELETE', `/api/acceso/biometria/${huella.datos.id}`, { token: tokenAdmin });
+    }
+  }
+
   // --- cambio de contrasena ---------------------------------------------
   const cambio = await pedir('POST', '/api/auth/cambiar-password', {
     token: tokenSocio,
-    cuerpo: { password_actual: CEDULA_PRUEBA, password_nueva: 'nueva-clave-123' },
+    cuerpo: { password_actual: PASSWORD_SOCIO, password_nueva: 'nueva-clave-123' },
   });
-  verificar('el socio cambia su contraseña', cambio.estado === 200, cambio.datos);
+  verificar(
+    'el socio cambia su contraseña y recibe un token nuevo',
+    cambio.estado === 200 && typeof cambio.datos?.token === 'string',
+    cambio.datos
+  );
+
+  // Cambiarla invalida lo emitido antes: el token con el que venia trabajando
+  // deja de servir y el que devuelve el cambio sigue andando.
+  const tokenViejo = await pedir('GET', '/api/rutinas', { token: tokenSocio });
+  verificar('el token anterior al cambio deja de valer', tokenViejo.estado === 401, tokenViejo.estado);
+
+  const tokenNuevo = await pedir('GET', '/api/rutinas', { token: cambio.datos?.token });
+  verificar('el token que devuelve el cambio sí sirve', tokenNuevo.estado === 200, tokenNuevo.estado);
 
   const reLogin = await pedir('POST', '/api/auth/login', {
     cuerpo: { documento: CEDULA_PRUEBA, password: 'nueva-clave-123' },
   });
   verificar(
-    'entra con la contraseña nueva y ya no se le exige cambiarla',
+    'entra con la contraseña nueva',
     reLogin.estado === 200 && reLogin.datos?.usuario?.debe_cambiar_password === false,
     reLogin.datos?.usuario
   );
+
+  // --- reinicio de contrasena por el administrador -----------------------
+  const sinClave = await pedir('POST', `/api/socios/${socioId}/reset-password`, { token: tokenAdmin });
+  verificar('el reinicio exige que el admin escriba la contraseña', sinClave.estado === 400, sinClave.datos);
+
+  const reinicio = await pedir('POST', `/api/socios/${socioId}/reset-password`, {
+    token: tokenAdmin,
+    cuerpo: { password: 'reiniciada-456' },
+  });
+  verificar('el admin reinicia la contraseña', reinicio.estado === 200, reinicio.datos);
+
+  const trasReinicio = await pedir('GET', '/api/rutinas', { token: reLogin.datos?.token });
+  verificar('el reinicio cierra la sesión que estaba abierta', trasReinicio.estado === 401, trasReinicio.estado);
+
+  const loginReiniciado = await pedir('POST', '/api/auth/login', {
+    cuerpo: { documento: CEDULA_PRUEBA, password: 'reiniciada-456' },
+  });
+  verificar('el socio entra con la contraseña reiniciada', loginReiniciado.estado === 200, loginReiniciado.estado);
 
   console.log(`\n  ${pasos - fallos}/${pasos} verificaciones pasaron.`);
   if (fallos) console.log(`  ${fallos} FALLARON.\n`);

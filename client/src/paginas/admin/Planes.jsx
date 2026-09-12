@@ -54,35 +54,40 @@ export function Planes() {
         ))}
       </ul>
 
-      <EditorPlan
-        plan={editando}
-        onCerrar={() => setEditando(null)}
-        onGuardado={() => { setEditando(null); refrescar(); }}
-      />
+      {/* La `key` remonta el editor con el formulario ya cargado, así no hay
+          que sincronizar el estado con las props mientras se renderiza. */}
+      {editando && (
+        <EditorPlan
+          key={editando.id ?? 'nuevo'}
+          plan={editando}
+          onCerrar={() => setEditando(null)}
+          onGuardado={() => { setEditando(null); refrescar(); }}
+        />
+      )}
     </div>
   );
 }
 
+/**
+ * El editor se monta ya con el plan cargado (ver la `key` de arriba).
+ *
+ * Antes sincronizaba el formulario durante el render comparando `plan.id`
+ * contra el último cargado. Un plan nuevo no tiene id: `undefined` nunca
+ * coincidía con el `null` inicial, así que el setState se disparaba en cada
+ * render y React cortaba con "Too many re-renders" — la pantalla en negro al
+ * tocar "+ Nuevo plan". Editar andaba porque ahí sí había id.
+ */
 function EditorPlan({ plan, onCerrar, onGuardado }) {
-  const [form, setForm] = useState(VACIO);
+  const [form, setForm] = useState(() => ({
+    nombre: plan.nombre ?? '',
+    descripcion: plan.descripcion ?? '',
+    duracion_dias: plan.duracion_dias ?? '',
+    precio: plan.precio ?? '',
+    activo: plan.activo ?? true,
+  }));
   const [error, setError] = useState('');
   const [errores, setErrores] = useState({});
   const [enviando, setEnviando] = useState(false);
-  const [idCargado, setIdCargado] = useState(null);
-
-  // Sincroniza el formulario cuando cambia el plan que se está editando.
-  if (plan && plan.id !== idCargado) {
-    setIdCargado(plan.id ?? null);
-    setForm({
-      nombre: plan.nombre ?? '',
-      descripcion: plan.descripcion ?? '',
-      duracion_dias: plan.duracion_dias ?? '',
-      precio: plan.precio ?? '',
-      activo: plan.activo ?? true,
-    });
-    setError('');
-    setErrores({});
-  }
 
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
 
@@ -96,9 +101,8 @@ function EditorPlan({ plan, onCerrar, onGuardado }) {
         duracion_dias: Number(form.duracion_dias),
         precio: Number(form.precio),
       };
-      if (plan?.id) await api.patch(`/api/planes/${plan.id}`, cuerpo);
+      if (plan.id) await api.patch(`/api/planes/${plan.id}`, cuerpo);
       else await api.post('/api/planes', cuerpo);
-      setIdCargado(null);
       setEnviando(false);
       onGuardado();
     } catch (err) {
@@ -109,7 +113,7 @@ function EditorPlan({ plan, onCerrar, onGuardado }) {
   }
 
   return (
-    <Modal abierto={Boolean(plan)} titulo={plan?.id ? 'Editar plan' : 'Nuevo plan'} onCerrar={onCerrar}>
+    <Modal abierto titulo={plan.id ? 'Editar plan' : 'Nuevo plan'} onCerrar={onCerrar}>
       <form onSubmit={enviar} className="space-y-4">
         <Campo etiqueta="Nombre" error={errores.nombre} requerido>
           <input className="campo" value={form.nombre} onChange={set('nombre')} required autoFocus />

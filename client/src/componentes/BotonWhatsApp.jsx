@@ -17,12 +17,24 @@ const IconoWhatsApp = ({ tam = 15 }) => (
  * la fecha del aviso para que el socio no aparezca de nuevo mañana como
  * pendiente de contactar.
  */
-export function BotonWhatsApp({ socio, variante = 'secundario', onAvisado, texto }) {
+export function BotonWhatsApp({
+  socio,
+  variante = 'secundario',
+  onAvisado,
+  texto,
+  // El mismo botón sirve para el vencimiento, para el que dejó de venir y
+  // para el saludo de cumpleaños: cambian el texto y dónde se anota el aviso.
+  mensaje: mensajePropio,
+  rutaAviso,
+}) {
   const [avisando, setAvisando] = useState(false);
 
   const numero = telefonoWhatsApp(socio?.telefono);
-  const mensaje = socio ? mensajeVencimiento(socio) : '';
+  const mensaje = mensajePropio ?? (socio ? mensajeVencimiento(socio) : '');
   const enlace = enlaceWhatsApp(socio?.telefono, mensaje);
+  // `rutaAviso={null}` es "no anotes nada" (el cumpleaños no se registra).
+  const ruta =
+    rutaAviso === undefined ? `/api/socios/${socio?.socio_id}/aviso` : rutaAviso;
 
   if (!numero) {
     return (
@@ -45,9 +57,13 @@ export function BotonWhatsApp({ socio, variante = 'secundario', onAvisado, texto
     // No se frena la navegación: el enlace abre en otra pestaña igual.
     e.stopPropagation();
     if (avisando) return;
+    if (!ruta) {
+      onAvisado?.();
+      return;
+    }
     setAvisando(true);
     try {
-      await api.post(`/api/socios/${socio.socio_id}/aviso`);
+      await api.post(ruta);
       onAvisado?.();
     } catch {
       /* que falle el registro no debe impedir el aviso */

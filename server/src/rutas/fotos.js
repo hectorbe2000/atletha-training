@@ -25,9 +25,14 @@ const subida = multer({
     destination: (_req, _file, cb) => cb(null, CARPETA_FOTOS),
     filename: (req, file, cb) => {
       const ext = TIPOS[file.mimetype] ?? '.jpg';
+      // El id va por Number() y no crudo: Express decodifica los %2F de la URL,
+      // asi que un ":id" como "..%2F..%2Fx" salia de uploads/socios/ al armar
+      // el nombre. Si no es un numero, el handler responde 404 mas abajo.
+      const id = Number.parseInt(req.params.id, 10);
+      const seguro = Number.isInteger(id) && id > 0 ? id : 'desconocido';
       // El sufijo temporal evita que el navegador muestre la foto vieja
       // cacheada cuando se reemplaza.
-      cb(null, `socio-${req.params.id}-${Date.now()}${ext}`);
+      cb(null, `socio-${seguro}-${Date.now()}${ext}`);
     },
   }),
   limits: { fileSize: 3 * 1024 * 1024, files: 1 },
@@ -51,6 +56,15 @@ export const rutasFotos = Router();
 // coincida o no con alguna de sus rutas. Con soloAdmin ahí arriba, un socio
 // no podía ni ver su propia ficha. Los guardias van ruta por ruta.
 const guardias = [autenticar, soloAdmin];
+
+/** El :id de la URL como entero, o 400 si no lo es. */
+function idSocio(req) {
+  const id = Number.parseInt(req.params.id, 10);
+  if (!Number.isInteger(id) || id <= 0) {
+    throw new ErrorHttp(400, 'El identificador de socio no es válido.');
+  }
+  return id;
+}
 
 /** Borra el archivo anterior para no dejar huérfanos acumulándose. */
 async function borrarArchivo(rutaRelativa) {
@@ -80,9 +94,7 @@ rutasFotos.post(
     }
     if (!req.file) throw new ErrorHttp(400, 'No llegó ninguna foto.');
 
-    const socio = await una('SELECT id, foto_url FROM socios WHERE id = $1', [
-      Number(req.params.id),
-    ]);
+    const socio = await una('SELECT id, foto_url FROM socios WHERE id = $1', [idSocio(req)]);
     if (!socio) {
       await borrarArchivo(req.file.filename);
       throw noEncontrado('Socio');
@@ -101,9 +113,7 @@ rutasFotos.delete(
   '/:id/foto',
   ...guardias,
   ruta(async (req, res) => {
-    const socio = await una('SELECT id, foto_url FROM socios WHERE id = $1', [
-      Number(req.params.id),
-    ]);
+    const socio = await una('SELECT id, foto_url FROM socios WHERE id = $1', [idSocio(req)]);
     if (!socio) throw noEncontrado('Socio');
 
     await query('UPDATE socios SET foto_url = NULL WHERE id = $1', [socio.id]);

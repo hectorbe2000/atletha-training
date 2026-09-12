@@ -1,7 +1,8 @@
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 
-import { api, fecha, guaranies, qs } from '../../api.js';
+import { api, bajarArchivo, fecha, guaranies, qs } from '../../api.js';
+import { BotonComprobante } from '../../componentes/BotonComprobante.jsx';
 import { BotonWhatsApp, SelloAviso } from '../../componentes/BotonWhatsApp.jsx';
 import { FotoSocio } from '../../componentes/FotoSocio.jsx';
 import { Aviso, Campo, Cargando, InsigniaEstado, Modal, Vacio } from '../../componentes/ui.jsx';
@@ -29,6 +30,26 @@ export function Socios() {
 
   const { datos, error, cargando, recargando, refrescar } = useDatos(ruta);
 
+  const [descargando, setDescargando] = useState(false);
+  const [errorDescarga, setErrorDescarga] = useState('');
+
+  /**
+   * Baja la planilla completa, no la página que se está viendo: quien la pide
+   * la quiere para el contador o para su propio control, no para revisar 20
+   * filas que ya tiene en pantalla.
+   */
+  async function descargarPlanilla() {
+    setErrorDescarga('');
+    setDescargando(true);
+    try {
+      await bajarArchivo('/api/socios/exportar', 'socios.csv');
+    } catch (e) {
+      setErrorDescarga(e.message);
+    } finally {
+      setDescargando(false);
+    }
+  }
+
   return (
     <div>
       <header className="mb-4 flex flex-wrap items-baseline justify-between gap-3">
@@ -38,10 +59,23 @@ export function Socios() {
             {datos ? `${datos.total} socios` : '—'}
           </p>
         </div>
-        <button type="button" onClick={() => setAbrirAlta(true)} className="btn-primario">
-          + Nuevo socio
-        </button>
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={descargarPlanilla}
+            disabled={descargando}
+            className="btn-secundario"
+            title="Baja la lista completa en un archivo que Excel abre directo"
+          >
+            {descargando ? 'Preparando…' : 'Descargar Excel'}
+          </button>
+          <button type="button" onClick={() => setAbrirAlta(true)} className="btn-primario">
+            + Nuevo socio
+          </button>
+        </div>
       </header>
+
+      {errorDescarga && <Aviso tipo="error" className="mb-3">{errorDescarga}</Aviso>}
 
       <div className="mb-4 flex flex-wrap gap-2">
         <input
@@ -93,6 +127,14 @@ export function Socios() {
                   </p>
                 </div>
                 <InsigniaEstado estado={s.estado} dias={s.dias_restantes} />
+                {/* El comprobante del último cobro, sin entrar a la ficha:
+                    si al cobrar se olvidaron de bajarlo, está acá. */}
+                {s.ultimo_pago_id && (
+                  <BotonComprobante
+                    pagoId={s.ultimo_pago_id}
+                    titulo="Bajar el comprobante del último pago"
+                  />
+                )}
                 {s.estado !== 'AL_DIA' && <BotonWhatsApp socio={s} onAvisado={refrescar} />}
               </li>
             ))}
@@ -131,7 +173,7 @@ function AltaSocio({ abierto, onCerrar, onCreado }) {
   const { datos: planes } = useDatos('/api/planes', { activo: abierto });
 
   const [form, setForm] = useState({
-    documento: '', nombre: '', apellido: '', telefono: '', email: '',
+    documento: '', password: '', nombre: '', apellido: '', telefono: '', email: '',
     fecha_nacimiento: '', sexo: '', objetivo: '', observaciones_medicas: '',
     plan_id: '', metodo: 'EFECTIVO', monto: '',
   });
@@ -139,6 +181,7 @@ function AltaSocio({ abierto, onCerrar, onCreado }) {
   const [error, setError] = useState('');
   const [enviando, setEnviando] = useState(false);
   const [creado, setCreado] = useState(null);
+  const [verPassword, setVerPassword] = useState(false);
 
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
   const planElegido = planes?.find((p) => String(p.id) === String(form.plan_id));
@@ -171,6 +214,7 @@ function AltaSocio({ abierto, onCerrar, onCreado }) {
       plan_id: '', metodo: 'EFECTIVO', monto: '',
     });
     setEnviando(false);
+    setVerPassword(false);
     onCreado();
   }
 
@@ -182,15 +226,10 @@ function AltaSocio({ abierto, onCerrar, onCreado }) {
           <div className="tarjeta bg-superficie-alta p-3.5">
             <p className="text-[12px] text-texto-tenue">Código de socio</p>
             <p className="text-lg font-semibold">{creado.codigo}</p>
-            {creado.password_inicial && (
-              <>
-                <p className="mt-3 text-[12px] text-texto-tenue">Contraseña inicial</p>
-                <p className="text-lg font-semibold tabular-nums">{creado.password_inicial}</p>
-                <p className="mt-1 text-[12px] text-texto-suave">
-                  Se la va a pedir cambiar la primera vez que entre.
-                </p>
-              </>
-            )}
+            <p className="mt-3 text-[12px] text-texto-suave">
+              Entra con su cédula y la contraseña que le pusiste. Si se la olvida, se la
+              reiniciás desde la ficha.
+            </p>
           </div>
           <div className="flex gap-2">
             <Link to={`/admin/socios/${creado.socio_id}`} className="btn-primario flex-1" onClick={cerrarTodo}>
@@ -219,6 +258,31 @@ function AltaSocio({ abierto, onCerrar, onCreado }) {
               required
               autoFocus
             />
+          </Campo>
+          <Campo
+            etiqueta="Contraseña"
+            error={errores.password}
+            requerido
+            hint="La elegís vos y se la decís al socio. Mínimo 6 caracteres."
+          >
+            <input
+              className="campo"
+              type={verPassword ? 'text' : 'password'}
+              value={form.password}
+              onChange={set('password')}
+              autoComplete="new-password"
+              minLength={6}
+              required
+            />
+            {/* Se puede mostrar: el administrador la está dictando en el
+                mostrador y necesita leer lo que escribió. */}
+            <button
+              type="button"
+              onClick={() => setVerPassword((v) => !v)}
+              className="btn-fantasma mt-1 -ml-2 px-2 text-[12px]"
+            >
+              {verPassword ? 'Ocultar' : 'Mostrar'}
+            </button>
           </Campo>
           <Campo etiqueta="Teléfono" error={errores.telefono}>
             <input className="campo" value={form.telefono} onChange={set('telefono')} placeholder="0981 123 456" />

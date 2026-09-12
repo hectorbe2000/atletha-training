@@ -17,7 +17,6 @@ import { Aviso, Campo, Cargando, Modal, Tile } from './ui.jsx';
 
 const MEDIDAS = [
   ['peso_kg', 'Peso', 'kg', 0.1],
-  ['grasa_pct', 'Grasa', '%', 0.1],
   ['cuello_cm', 'Cuello', 'cm', 0.5],
   ['pecho_cm', 'Pecho', 'cm', 0.5],
   ['cintura_cm', 'Cintura', 'cm', 0.5],

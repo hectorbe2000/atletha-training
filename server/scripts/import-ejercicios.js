@@ -1,5 +1,5 @@
 /**
- * Carga data/exercises.json del dataset a PostgreSQL.
+ * Carga media/exercises.json a PostgreSQL.
  *
  * - Inserta/actualiza los 1324 ejercicios (clave: codigo de 4 digitos).
  * - Inserta las instrucciones en los 10 idiomas del dataset.
@@ -12,7 +12,7 @@ import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 
-import { config, verificarDataset } from '../src/config.js';
+import { config, verificarCatalogo, verificarMedia } from '../src/config.js';
 import { pool, cerrarPool, transaccion } from '../src/db.js';
 
 const LOTE = 200;
@@ -32,10 +32,11 @@ async function insertarEnLotes(cliente, sqlBase, columnas, filas, sufijo = '') {
 }
 
 async function main() {
-  verificarDataset();
+  verificarMedia();
+  verificarCatalogo();
 
-  console.log(`Leyendo ${config.dataset.json} ...`);
-  const crudo = await readFile(config.dataset.json, 'utf8');
+  console.log(`Leyendo ${config.media.json} ...`);
+  const crudo = await readFile(config.media.json, 'utf8');
   const ejercicios = JSON.parse(crudo);
   console.log(`  ${ejercicios.length} ejercicios en el archivo.`);
 
@@ -43,8 +44,8 @@ async function main() {
   const sinImagen = [];
   const sinGif = [];
   for (const e of ejercicios) {
-    if (!existsSync(path.join(config.dataset.raiz, e.image))) sinImagen.push(e.id);
-    if (!existsSync(path.join(config.dataset.raiz, e.gif_url))) sinGif.push(e.id);
+    if (!existsSync(path.join(config.media.raiz, e.image))) sinImagen.push(e.id);
+    if (!existsSync(path.join(config.media.raiz, e.gif_url))) sinGif.push(e.id);
   }
   if (sinImagen.length || sinGif.length) {
     console.warn(`  ! ${sinImagen.length} sin imagen, ${sinGif.length} sin GIF.`);

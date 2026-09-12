@@ -1,7 +1,9 @@
 node_modules/
 dist/
+# Credenciales: nunca al repositorio. El .env.example si va, es la plantilla.
 .env
-.env.local
+.env.*
+!.env.example
 *.log
 npm-debug.log*
 .DS_Store
@@ -11,3 +13,9 @@ uploads/
 # Copias de la base: nunca al repositorio
 respaldos/
 *.dump
+
+# Fotos y GIF de los ejercicios: 139 MB que no tienen por que ir al repo.
+# La licencia y el aviso de atribucion si se versionan.
+media/images/
+media/videos/
+media/exercises.json

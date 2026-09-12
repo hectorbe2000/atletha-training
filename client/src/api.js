@@ -88,6 +88,59 @@ async function subirArchivo(ruta, formData) {
   return datos;
 }
 
+/**
+ * Pide un archivo protegido (el comprobante en PDF, las planillas) y devuelve
+ * una URL temporal del navegador.
+ *
+ * Un `<a href="/api/...">` pelado no sirve: la API exige el header
+ * Authorization y el navegador no lo manda por su cuenta.
+ */
+async function pedirArchivo(ruta) {
+  const token = leerToken();
+  const res = await fetch(ruta, {
+    headers: token ? { authorization: `Bearer ${token}` } : {},
+  });
+
+  if (res.status === 401) {
+    borrarToken();
+    alExpirar();
+  }
+  if (!res.ok) {
+    // El error sí viene en JSON aunque lo pedido fuera un PDF.
+    const texto = await res.text();
+    let datos = null;
+    try {
+      datos = texto ? JSON.parse(texto) : null;
+    } catch {
+      /* no era JSON */
+    }
+    throw new ErrorApi(res.status, datos?.error ?? 'No se pudo generar el archivo.');
+  }
+
+  const url = URL.createObjectURL(await res.blob());
+  // Se libera sola al rato: revocarla enseguida deja en blanco la pestaña
+  // que la acaba de abrir.
+  setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  return url;
+}
+
+/**
+ * Lo baja con un nombre de archivo dado.
+ *
+ * Se descarga y no se abre en una pestaña: `window.open` después de un
+ * `await` ya no cuenta como gesto del usuario y el bloqueador de emergentes
+ * lo corta, así que el botón parecía no hacer nada.
+ */
+export async function bajarArchivo(ruta, nombre) {
+  const url = await pedirArchivo(ruta);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = nombre;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
+
 export const api = {
   subir: subirArchivo,
   get: (ruta, opciones) => pedir('GET', ruta, undefined, opciones),

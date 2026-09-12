@@ -9,7 +9,7 @@ import { useDatos, useRetraso } from '../../hooks.js';
 const diaVacio = (n) => ({ etiqueta: `Día ${String.fromCharCode(64 + n)}`, nota: '', ejercicios: [] });
 
 /**
- * Armador de rutinas. Usa la disposición densa del prototipo "Ficha" para
+ * Armador de rutinas. Usa la disposición densa de la card para
  * el catálogo: acá el que decide es el profe y necesita ver datos, no mirar
  * la animación.
  */

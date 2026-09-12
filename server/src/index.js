@@ -8,15 +8,19 @@ import express from 'express';
 import helmet from 'helmet';
 import morgan from 'morgan';
 
-import { config, RAIZ_PROYECTO, verificarDataset } from './config.js';
+import { detenerAcceso, iniciarAcceso } from './acceso/index.js';
+import { config, RAIZ_PROYECTO, verificarMedia } from './config.js';
 import { pool } from './db.js';
 import { ErrorHttp } from './http.js';
+import { autenticar, passwordAlDia } from './middleware/auth.js';
+import { rutasAcceso } from './rutas/acceso.js';
 import { rutasAuth } from './rutas/auth.js';
 import { rutasDashboard } from './rutas/dashboard.js';
 import { rutasEjercicios } from './rutas/ejercicios.js';
 import { CARPETA_FOTOS, rutasFotos } from './rutas/fotos.js';
 import { rutasEntrenamiento } from './rutas/entrenamiento.js';
 import { rutasMediciones } from './rutas/mediciones.js';
+import { rutasPagos } from './rutas/pagos.js';
 import { rutasPlanes } from './rutas/planes.js';
 import { rutasPlantillas } from './rutas/plantillas.js';
 import { rutasRutinas } from './rutas/rutinas.js';
@@ -41,7 +45,13 @@ if (MAYOR < 18) {
 const app = express();
 
 app.disable('x-powered-by');
-app.set('trust proxy', 1);
+
+// Nada de `trust proxy`: Express escucha directo en la LAN, sin nginx delante.
+// Con trust proxy activado, req.ip sale del header X-Forwarded-For y cualquiera
+// conectado al WiFi puede mandar uno distinto en cada intento, con lo cual el
+// freno a la fuerza bruta del login (rutas/auth.js) no frena nada.
+// Si algun dia se pone un proxy real adelante, hay que volver a activarlo.
+app.set('trust proxy', false);
 
 app.use(
   helmet({
@@ -60,8 +70,8 @@ app.use(morgan(config.entorno === 'production' ? 'combined' : 'dev'));
 //  Media del dataset (1324 imagenes + 1324 GIFs) servida como estatico
 // --------------------------------------------------------------------
 const cacheMedia = { maxAge: '30d', immutable: true, fallthrough: false };
-app.use('/media/images', express.static(config.dataset.imagenes, cacheMedia));
-app.use('/media/videos', express.static(config.dataset.videos, cacheMedia));
+app.use('/media/images', express.static(config.media.imagenes, cacheMedia));
+app.use('/media/videos', express.static(config.media.videos, cacheMedia));
 
 // Fotos de los socios. Sin cache larga: al reemplazarla el nombre cambia,
 // pero si alguien la borra y vuelve a subir conviene que se note enseguida.
@@ -80,8 +90,17 @@ app.get('/api/salud', async (_req, res) => {
 });
 
 app.use('/api/auth', rutasAuth);
+
+// De acá para abajo todo exige sesión, y exige que el usuario ya haya elegido
+// su contraseña. La obligación de cambiarla vivía solo en el frontend, así que
+// el token de alguien que todavía usaba la contraseña inicial servía igual
+// para pegarle a la API por afuera de la pantalla que se la pedía.
+// Va acá y no en cada router para que no quede ninguno afuera por olvido.
+app.use('/api', autenticar, passwordAlDia);
+
 app.use('/api/socios', rutasFotos);   // /:id/foto — va antes que rutasSocios
 app.use('/api/socios', rutasSocios);
+app.use('/api/pagos', rutasPagos);
 app.use('/api/planes', rutasPlanes);
 app.use('/api/plantillas', rutasPlantillas);
 app.use('/api/ejercicios', rutasEjercicios);
@@ -89,6 +108,7 @@ app.use('/api/rutinas', rutasRutinas);
 app.use('/api/entrenamiento', rutasEntrenamiento);
 app.use('/api/mediciones', rutasMediciones);
 app.use('/api/dashboard', rutasDashboard);
+app.use('/api/acceso', rutasAcceso);
 
 app.use('/api', (_req, _res, next) => next(new ErrorHttp(404, 'Ruta no encontrada.')));
 
@@ -165,12 +185,13 @@ async function avisarSiPuertoOcupado(puerto) {
   }
 }
 
-verificarDataset();
+verificarMedia();
 await avisarSiPuertoOcupado(config.puerto);
+await iniciarAcceso();
 
 // Escucha en 0.0.0.0 para que los socios entren desde el celular en la LAN.
 const servidor = app.listen(config.puerto, '0.0.0.0', () => {
-  console.log(`\n  API del gimnasio — entorno ${config.entorno}`);
+  console.log(`\n  ${config.gimnasio.nombre} — entorno ${config.entorno}`);
   console.log(`  Base de datos:  ${config.db.database}@${config.db.host}:${config.db.port}`);
   console.log('');
   console.log('  ABRÍ EL SISTEMA EN:');
